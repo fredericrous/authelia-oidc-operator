@@ -34,20 +34,24 @@ func NewAssembler(client client.Client, log logr.Logger) *Assembler {
 
 // ClientEntry represents an OIDC client entry for Authelia configuration
 type ClientEntry struct {
-	ClientID                  string   `json:"client_id"`
-	ClientName                string   `json:"client_name"`
-	ClientSecret              string   `json:"client_secret"`
-	Public                    bool     `json:"public"`
-	AuthorizationPolicy       string   `json:"authorization_policy"`
-	RedirectURIs              []string `json:"redirect_uris"`
-	Scopes                    []string `json:"scopes"`
-	ResponseTypes             []string `json:"response_types"`
-	GrantTypes                []string `json:"grant_types"`
-	ResponseModes             []string `json:"response_modes"`
-	UserinfoSignedResponseAlg string   `json:"userinfo_signed_response_alg"`
-	TokenEndpointAuthMethod   string   `json:"token_endpoint_auth_method"`
-	RequirePKCE               bool     `json:"require_pkce"`
-	PKCEChallengeMethod       string   `json:"pkce_challenge_method"`
+	ClientID                     string   `json:"client_id"`
+	ClientName                   string   `json:"client_name"`
+	ClientSecret                 string   `json:"client_secret,omitempty"`
+	Public                       bool     `json:"public,omitempty"`
+	AuthorizationPolicy          string   `json:"authorization_policy,omitempty"`
+	ConsentMode                  string   `json:"consent_mode,omitempty"`
+	PreconfiguredConsentDuration string   `json:"pre_configured_consent_duration,omitempty"`
+	Audience                     []string `json:"audience,omitempty"`
+	SectorIdentifier             string   `json:"sector_identifier,omitempty"`
+	RedirectURIs                 []string `json:"redirect_uris"`
+	Scopes                       []string `json:"scopes"`
+	ResponseTypes                []string `json:"response_types"`
+	GrantTypes                   []string `json:"grant_types"`
+	ResponseModes                []string `json:"response_modes"`
+	UserinfoSignedResponseAlg    string   `json:"userinfo_signed_response_alg"`
+	TokenEndpointAuthMethod      string   `json:"token_endpoint_auth_method"`
+	RequirePKCE                  bool     `json:"require_pkce,omitempty"`
+	PKCEChallengeMethod          string   `json:"pkce_challenge_method,omitempty"`
 }
 
 // AssemblyResult contains the result of OIDC configuration assembly
@@ -92,11 +96,16 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 
 // resolveClientSecret resolves the client secret from secretRef or generates one
 func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha1.OIDCClient, generatedSecrets map[string]string) (string, error) {
+	// Public clients don't need a secret
+	if oc.Spec.Public {
+		return "", nil
+	}
+
 	if oc.Spec.SecretRef != nil {
 		// Look up the referenced secret
 		namespace := oc.Spec.SecretRef.Namespace
 		if namespace == "" {
-			namespace = oc.Namespace
+			namespace = oc.ObjectMeta.Namespace
 		}
 
 		secret := &corev1.Secret{}
@@ -174,15 +183,16 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 		clientName = oc.Spec.ClientID
 	}
 
-	// Hash the client secret
-	hashedSecret := hashSecretPBKDF2(clientSecret)
+	authPolicy := oc.Spec.AuthorizationPolicy
+	if authPolicy == "" {
+		authPolicy = "two_factor"
+	}
 
-	return ClientEntry{
+	entry := ClientEntry{
 		ClientID:                  oc.Spec.ClientID,
 		ClientName:                clientName,
-		ClientSecret:              hashedSecret,
-		Public:                    false,
-		AuthorizationPolicy:       "two_factor",
+		Public:                    oc.Spec.Public,
+		AuthorizationPolicy:       authPolicy,
 		RedirectURIs:              oc.Spec.RedirectURIs,
 		Scopes:                    scopes,
 		ResponseTypes:             responseTypes,
@@ -193,6 +203,30 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 		RequirePKCE:               oc.Spec.RequirePKCE,
 		PKCEChallengeMethod:       pkceChallengeMethod,
 	}
+
+	// Set optional fields only if specified
+	if oc.Spec.ConsentMode != "" {
+		entry.ConsentMode = oc.Spec.ConsentMode
+	}
+
+	if oc.Spec.SectorIdentifier != "" {
+		entry.SectorIdentifier = oc.Spec.SectorIdentifier
+	}
+
+	if len(oc.Spec.Audience) > 0 {
+		entry.Audience = oc.Spec.Audience
+	}
+
+	if oc.Spec.PreconfiguredConsentDuration != nil {
+		entry.PreconfiguredConsentDuration = oc.Spec.PreconfiguredConsentDuration.Duration.String()
+	}
+
+	// Only set client secret for non-public clients
+	if !oc.Spec.Public && clientSecret != "" {
+		entry.ClientSecret = hashSecretPBKDF2(clientSecret)
+	}
+
+	return entry
 }
 
 // buildConfigYAML builds the Authelia OIDC configuration YAML

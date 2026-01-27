@@ -1,0 +1,33 @@
+---
+# Example of an OIDC client with advanced settings
+apiVersion: security.homelab.io/v1alpha1
+kind: OIDCClient
+metadata:
+  name: internal-service
+  namespace: services
+spec:
+  clientId: internal-service
+  clientName: Internal Service
+  secretRef:
+    name: internal-service-oidc
+    key: client_secret
+  redirectUris:
+    - https://service.internal.example.com/callback
+  scopes:
+    - openid
+    - profile
+    - email
+    - groups
+  # Audience restriction
+  audience:
+    - internal-api
+    - reporting-api
+  # Authorization settings
+  authorizationPolicy: two_factor
+  # Pre-configured consent for trusted internal services
+  consentMode: pre-configured
+  preconfiguredConsentDuration: "720h"  # 30 days
+  # Sector identifier for pairwise subject identifiers
+  sectorIdentifier: internal.example.com
+  # Token endpoint settings
+  tokenEndpointAuthMethod: client_secret_basic

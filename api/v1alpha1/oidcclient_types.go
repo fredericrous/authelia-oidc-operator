@@ -14,6 +14,11 @@ type OIDCClientSpec struct {
 	// +optional
 	ClientName string `json:"clientName,omitempty"`
 
+	// Public indicates if this is a public client (no client secret required)
+	// +optional
+	// +kubebuilder:default=false
+	Public bool `json:"public,omitempty"`
+
 	// RedirectURIs are the allowed redirect URIs
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
@@ -23,6 +28,10 @@ type OIDCClientSpec struct {
 	// +optional
 	// +kubebuilder:default={"openid","profile","email","groups"}
 	Scopes []string `json:"scopes,omitempty"`
+
+	// Audience is the list of allowed audiences for this client
+	// +optional
+	Audience []string `json:"audience,omitempty"`
 
 	// ResponseTypes are the allowed response types
 	// +optional
@@ -47,8 +56,26 @@ type OIDCClientSpec struct {
 	// TokenEndpointAuthMethod is the authentication method for the token endpoint
 	// +optional
 	// +kubebuilder:default="client_secret_basic"
-	// +kubebuilder:validation:Enum=client_secret_basic;client_secret_post;none
+	// +kubebuilder:validation:Enum=client_secret_basic;client_secret_post;client_secret_jwt;private_key_jwt;none
 	TokenEndpointAuthMethod string `json:"tokenEndpointAuthMethod,omitempty"`
+
+	// ConsentMode determines how user consent is handled
+	// +optional
+	// +kubebuilder:validation:Enum=auto;explicit;implicit;pre-configured
+	ConsentMode string `json:"consentMode,omitempty"`
+
+	// AuthorizationPolicy for the client
+	// +optional
+	// +kubebuilder:validation:Enum=one_factor;two_factor
+	AuthorizationPolicy string `json:"authorizationPolicy,omitempty"`
+
+	// SectorIdentifier for pairwise subject identifier
+	// +optional
+	SectorIdentifier string `json:"sectorIdentifier,omitempty"`
+
+	// PreconfiguredConsentDuration is the duration for pre-configured consent
+	// +optional
+	PreconfiguredConsentDuration *metav1.Duration `json:"preconfiguredConsentDuration,omitempty"`
 
 	// RequirePKCE indicates if PKCE is required for authorization code flow
 	// +optional

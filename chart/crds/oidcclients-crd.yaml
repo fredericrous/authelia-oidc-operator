@@ -53,6 +53,10 @@ spec:
                 clientName:
                   type: string
                   description: Display name for the client
+                public:
+                  type: boolean
+                  description: Whether this is a public client (no client secret required)
+                  default: false
                 redirectUris:
                   type: array
                   items:
@@ -68,6 +72,11 @@ spec:
                     - profile
                     - email
                     - groups
+                audience:
+                  type: array
+                  items:
+                    type: string
+                  description: Allowed audiences for this client
                 responseTypes:
                   type: array
                   items:
@@ -98,7 +107,29 @@ spec:
                   enum:
                     - client_secret_basic
                     - client_secret_post
+                    - client_secret_jwt
+                    - private_key_jwt
                     - none
+                consentMode:
+                  type: string
+                  description: How user consent is handled
+                  enum:
+                    - auto
+                    - explicit
+                    - implicit
+                    - pre-configured
+                authorizationPolicy:
+                  type: string
+                  description: Authorization policy for the client
+                  enum:
+                    - one_factor
+                    - two_factor
+                sectorIdentifier:
+                  type: string
+                  description: Sector identifier for pairwise subject identifier
+                preconfiguredConsentDuration:
+                  type: string
+                  description: Duration for pre-configured consent (e.g., "720h", "30d")
                 requirePkce:
                   type: boolean
                   description: Require PKCE for authorization code flow

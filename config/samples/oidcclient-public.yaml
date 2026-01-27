@@ -1,0 +1,26 @@
+---
+# Example of a public OIDC client (e.g., single page app, mobile app)
+# Public clients don't have a client secret
+apiVersion: security.homelab.io/v1alpha1
+kind: OIDCClient
+metadata:
+  name: mobile-app
+  namespace: apps
+spec:
+  clientId: mobile-app
+  clientName: Mobile Application
+  # Public client - no secret required
+  public: true
+  redirectUris:
+    - myapp://callback
+    - http://localhost:3000/callback
+  scopes:
+    - openid
+    - profile
+    - email
+  # PKCE is recommended for public clients
+  requirePkce: true
+  pkceChallengeMethod: S256
+  # Authorization settings
+  authorizationPolicy: two_factor
+  consentMode: explicit
