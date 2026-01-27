@@ -106,8 +106,13 @@ jobs:
 
           ### Installation
           \`\`\`bash
-          kubectl apply -f https://raw.githubusercontent.com/fredericrous/homelab/main/authelia-oidc-operator/config/crd/bases/security.homelab.io_oidcclients.yaml
-          kubectl apply -k kubernetes/homelab/security/authelia-oidc-operator/
+          # Using Helm
+          helm repo add fredericrous https://fredericrous.github.io/charts
+          helm repo update
+          helm install authelia-oidc-operator fredericrous/authelia-oidc-operator -n authelia
+
+          # Or manually
+          kubectl apply -f https://raw.githubusercontent.com/fredericrous/authelia-oidc-operator/main/config/crd/bases/security.homelab.io_oidcclients.yaml
           \`\`\`
 
           ### What's Changed

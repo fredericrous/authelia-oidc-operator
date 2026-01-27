@@ -171,7 +171,7 @@ jobs:
             ```
 
             ---
-            *This PR was automatically generated when [operator version ${{ steps.version.outputs.version }}](https://github.com/fredericrous/homelab/releases/tag/authelia-oidc-operator-v${{ steps.version.outputs.version }}) was released.*
+            *This PR was automatically generated when [operator version ${{ steps.version.outputs.version }}](https://github.com/fredericrous/authelia-oidc-operator/releases/tag/v${{ steps.version.outputs.version }}) was released.*
           branch: update-authelia-oidc-operator-${{ steps.version.outputs.version }}
           base: main
           labels: |
