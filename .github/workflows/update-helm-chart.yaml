@@ -27,6 +27,14 @@ jobs:
     name: Update Helm Chart Version
     runs-on: ubuntu-latest
     steps:
+      - name: Check required secrets
+        run: |
+          if [ -z "${{ secrets.CHARTS_REPO_TOKEN }}" ]; then
+            echo "::error::CHARTS_REPO_TOKEN secret is not set. This secret is required to create PRs on the charts repository."
+            echo "::error::Please add a Personal Access Token with 'repo' scope as CHARTS_REPO_TOKEN in repository secrets."
+            exit 1
+          fi
+
       - name: Determine version
         id: version
         run: |
@@ -72,7 +80,7 @@ jobs:
 
           echo "Current state:"
           echo "- Chart version: $CURRENT_CHART_VERSION"
-          echo "- App version: $CURRENT_APP_VERSION → $NEW_APP_VERSION"
+          echo "- App version: $CURRENT_APP_VERSION -> $NEW_APP_VERSION"
 
           yq -i ".appVersion = \"$NEW_APP_VERSION\"" "$CHART_PATH"
 
@@ -102,7 +110,7 @@ jobs:
               NEW_CHART_VERSION="$CHART_MAJOR.$CHART_MINOR.$((CHART_PATCH + 1))"
             fi
 
-            echo "Updating chart version: $CURRENT_CHART_VERSION → $NEW_CHART_VERSION"
+            echo "Updating chart version: $CURRENT_CHART_VERSION -> $NEW_CHART_VERSION"
             yq -i ".version = \"$NEW_CHART_VERSION\"" "$CHART_PATH"
             echo "chart_version=$NEW_CHART_VERSION" >> $GITHUB_OUTPUT
             echo "version_bump_reason=$BUMP_TYPE" >> $GITHUB_OUTPUT
