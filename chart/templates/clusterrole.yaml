@@ -1,0 +1,72 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "authelia-oidc-operator.fullname" . }}
+  labels:
+    {{- include "authelia-oidc-operator.labels" . | nindent 4 }}
+rules:
+  # OIDCClient resources
+  - apiGroups:
+      - security.homelab.io
+    resources:
+      - oidcclients
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - security.homelab.io
+    resources:
+      - oidcclients/status
+    verbs:
+      - get
+      - update
+      - patch
+  # Secrets
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # ConfigMaps
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Events
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  # Leases (for leader election)
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - create
+      - update

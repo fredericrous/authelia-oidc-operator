@@ -1,0 +1,263 @@
+package assembler
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha512"
+	"encoding/base64"
+	"fmt"
+
+	"github.com/go-logr/logr"
+	"golang.org/x/crypto/pbkdf2"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
+
+	securityv1alpha1 "github.com/fredericrous/homelab/authelia-oidc-operator/api/v1alpha1"
+	operrors "github.com/fredericrous/homelab/authelia-oidc-operator/pkg/errors"
+)
+
+// Assembler handles OIDC configuration assembly for Authelia
+type Assembler struct {
+	Client client.Client
+	Log    logr.Logger
+}
+
+// NewAssembler creates a new Assembler
+func NewAssembler(client client.Client, log logr.Logger) *Assembler {
+	return &Assembler{
+		Client: client,
+		Log:    log,
+	}
+}
+
+// ClientEntry represents an OIDC client entry for Authelia configuration
+type ClientEntry struct {
+	ClientID                  string   `json:"client_id"`
+	ClientName                string   `json:"client_name"`
+	ClientSecret              string   `json:"client_secret"`
+	Public                    bool     `json:"public"`
+	AuthorizationPolicy       string   `json:"authorization_policy"`
+	RedirectURIs              []string `json:"redirect_uris"`
+	Scopes                    []string `json:"scopes"`
+	ResponseTypes             []string `json:"response_types"`
+	GrantTypes                []string `json:"grant_types"`
+	ResponseModes             []string `json:"response_modes"`
+	UserinfoSignedResponseAlg string   `json:"userinfo_signed_response_alg"`
+	TokenEndpointAuthMethod   string   `json:"token_endpoint_auth_method"`
+	RequirePKCE               bool     `json:"require_pkce"`
+	PKCEChallengeMethod       string   `json:"pkce_challenge_method"`
+}
+
+// AssemblyResult contains the result of OIDC configuration assembly
+type AssemblyResult struct {
+	// Clients is the list of assembled OIDC client entries
+	Clients []ClientEntry
+
+	// GeneratedSecrets contains secrets that were generated for clients
+	GeneratedSecrets map[string]string
+
+	// ConfigYAML is the assembled Authelia configuration YAML
+	ConfigYAML string
+}
+
+// Assemble processes all OIDCClients and assembles the Authelia configuration
+func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1.OIDCClient, oidcSecrets *corev1.Secret) (*AssemblyResult, error) {
+	result := &AssemblyResult{
+		Clients:          make([]ClientEntry, 0, len(oidcClients)),
+		GeneratedSecrets: make(map[string]string),
+	}
+
+	for _, oc := range oidcClients {
+		clientSecret, err := a.resolveClientSecret(ctx, &oc, result.GeneratedSecrets)
+		if err != nil {
+			return nil, operrors.NewTransientError("failed to resolve client secret", err).
+				WithContext("clientId", oc.Spec.ClientID)
+		}
+
+		entry := a.buildClientEntry(&oc, clientSecret)
+		result.Clients = append(result.Clients, entry)
+	}
+
+	// Build the OIDC configuration section
+	configYAML, err := a.buildConfigYAML(result.Clients, oidcSecrets)
+	if err != nil {
+		return nil, operrors.NewPermanentError("failed to build config YAML", err)
+	}
+	result.ConfigYAML = configYAML
+
+	return result, nil
+}
+
+// resolveClientSecret resolves the client secret from secretRef or generates one
+func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha1.OIDCClient, generatedSecrets map[string]string) (string, error) {
+	if oc.Spec.SecretRef != nil {
+		// Look up the referenced secret
+		namespace := oc.Spec.SecretRef.Namespace
+		if namespace == "" {
+			namespace = oc.Namespace
+		}
+
+		secret := &corev1.Secret{}
+		err := a.Client.Get(ctx, types.NamespacedName{
+			Name:      oc.Spec.SecretRef.Name,
+			Namespace: namespace,
+		}, secret)
+		if err != nil {
+			return "", operrors.NewTransientError("failed to get secret", err).
+				WithContext("secretName", oc.Spec.SecretRef.Name).
+				WithContext("namespace", namespace)
+		}
+
+		key := oc.Spec.SecretRef.Key
+		if key == "" {
+			key = "client_secret"
+		}
+
+		secretValue, ok := secret.Data[key]
+		if !ok {
+			return "", operrors.NewConfigError("key not found in secret", nil).
+				WithContext("key", key).
+				WithContext("secretName", oc.Spec.SecretRef.Name)
+		}
+
+		return string(secretValue), nil
+	}
+
+	// Generate a new secret
+	clientSecret := generateSecret()
+	generatedSecrets[oc.Spec.ClientID] = clientSecret
+	return clientSecret, nil
+}
+
+// buildClientEntry builds a client entry from an OIDCClient
+func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecret string) ClientEntry {
+	// Apply defaults
+	scopes := oc.Spec.Scopes
+	if len(scopes) == 0 {
+		scopes = []string{"openid", "profile", "email", "groups"}
+	}
+
+	responseTypes := oc.Spec.ResponseTypes
+	if len(responseTypes) == 0 {
+		responseTypes = []string{"code"}
+	}
+
+	grantTypes := oc.Spec.GrantTypes
+	if len(grantTypes) == 0 {
+		grantTypes = []string{"authorization_code"}
+	}
+
+	responseModes := oc.Spec.ResponseModes
+	if len(responseModes) == 0 {
+		responseModes = []string{"form_post", "query", "fragment"}
+	}
+
+	userinfoAlg := oc.Spec.UserinfoSignedResponseAlg
+	if userinfoAlg == "" {
+		userinfoAlg = "none"
+	}
+
+	tokenAuthMethod := oc.Spec.TokenEndpointAuthMethod
+	if tokenAuthMethod == "" {
+		tokenAuthMethod = "client_secret_basic"
+	}
+
+	pkceChallengeMethod := oc.Spec.PKCEChallengeMethod
+	if pkceChallengeMethod == "" {
+		pkceChallengeMethod = "S256"
+	}
+
+	clientName := oc.Spec.ClientName
+	if clientName == "" {
+		clientName = oc.Spec.ClientID
+	}
+
+	// Hash the client secret
+	hashedSecret := hashSecretPBKDF2(clientSecret)
+
+	return ClientEntry{
+		ClientID:                  oc.Spec.ClientID,
+		ClientName:                clientName,
+		ClientSecret:              hashedSecret,
+		Public:                    false,
+		AuthorizationPolicy:       "two_factor",
+		RedirectURIs:              oc.Spec.RedirectURIs,
+		Scopes:                    scopes,
+		ResponseTypes:             responseTypes,
+		GrantTypes:                grantTypes,
+		ResponseModes:             responseModes,
+		UserinfoSignedResponseAlg: userinfoAlg,
+		TokenEndpointAuthMethod:   tokenAuthMethod,
+		RequirePKCE:               oc.Spec.RequirePKCE,
+		PKCEChallengeMethod:       pkceChallengeMethod,
+	}
+}
+
+// buildConfigYAML builds the Authelia OIDC configuration YAML
+func (a *Assembler) buildConfigYAML(clients []ClientEntry, oidcSecrets *corev1.Secret) (string, error) {
+	oidcConfig := map[string]interface{}{
+		"clients": clients,
+	}
+
+	// Add JWKS configuration if secrets are available
+	if oidcSecrets != nil {
+		privateKey := string(oidcSecrets.Data["issuer_private_key"])
+		certChain := string(oidcSecrets.Data["issuer_certificate_chain"])
+
+		if privateKey != "" {
+			jwks := []map[string]interface{}{
+				{
+					"algorithm":         "RS256",
+					"use":               "sig",
+					"key":               privateKey,
+					"certificate_chain": certChain,
+				},
+			}
+			oidcConfig["jwks"] = jwks
+		}
+	}
+
+	config := map[string]interface{}{
+		"identity_providers": map[string]interface{}{
+			"oidc": oidcConfig,
+		},
+	}
+
+	yamlBytes, err := yaml.Marshal(config)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	return string(yamlBytes), nil
+}
+
+// generateSecret generates a random secret
+func generateSecret() string {
+	b := make([]byte, 48)
+	if _, err := rand.Read(b); err != nil {
+		return "changeme"
+	}
+	return base64.RawStdEncoding.EncodeToString(b)
+}
+
+// PHC B64 encoding: standard base64 with . instead of + and no padding
+var phcB64Encoding = base64.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./").WithPadding(base64.NoPadding)
+
+// hashSecretPBKDF2 hashes a secret using PBKDF2-SHA512 in Authelia's expected format
+// Format: $pbkdf2-sha512$<iterations>$<salt-b64>$<hash-b64>
+func hashSecretPBKDF2(secret string) string {
+	iterations := 310000
+	saltBytes := make([]byte, 16)
+	if _, err := rand.Read(saltBytes); err != nil {
+		return secret
+	}
+
+	hash := pbkdf2.Key([]byte(secret), saltBytes, iterations, 64, sha512.New)
+
+	saltB64 := phcB64Encoding.EncodeToString(saltBytes)
+	hashB64 := phcB64Encoding.EncodeToString(hash)
+
+	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", iterations, saltB64, hashB64)
+}

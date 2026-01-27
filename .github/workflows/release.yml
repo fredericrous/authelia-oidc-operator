@@ -1,0 +1,170 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: fredericrous/authelia-oidc-operator
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install dependencies
+        run: |
+          make controller-gen
+          make envtest
+
+      - name: Run tests
+        env:
+          KUBEBUILDER_ASSETS: "${{ github.workspace }}/bin/k8s/1.29.0-linux-amd64"
+        run: |
+          make test-unit
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION_IMG=${VERSION#v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_IMG=$VERSION_IMG" >> $GITHUB_OUTPUT
+
+          PREV_TAG=$(git describe --tags --abbrev=0 $VERSION^ 2>/dev/null || echo "")
+
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" $PREV_TAG..$VERSION)
+          else
+            COMMITS=$(git log --pretty=format:"- %s")
+          fi
+
+          cat > release-notes.md << EOF
+          ## Authelia OIDC Operator $VERSION
+
+          ### Docker Image
+          \`\`\`bash
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION_IMG
+          \`\`\`
+
+          ### Installation
+          \`\`\`bash
+          kubectl apply -f https://raw.githubusercontent.com/fredericrous/homelab/main/authelia-oidc-operator/config/crd/bases/security.homelab.io_oidcclients.yaml
+          kubectl apply -k kubernetes/homelab/security/authelia-oidc-operator/
+          \`\`\`
+
+          ### What's Changed
+          $COMMITS
+
+          ### Full Changelog
+          ${PREV_TAG:+https://github.com/${{ github.repository }}/compare/$PREV_TAG...$VERSION}
+          EOF
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+          generate_release_notes: true
+
+  security-scan:
+    name: Security Scan
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Wait for image to be available
+        run: |
+          echo "Waiting for image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }} to be available..."
+          for i in {1..30}; do
+            if docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }} > /dev/null 2>&1; then
+              echo "Image is available!"
+              break
+            fi
+            echo "Attempt $i/30: Image not yet available, waiting 10 seconds..."
+            sleep 10
+          done
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'

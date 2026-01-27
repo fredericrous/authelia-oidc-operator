@@ -1,0 +1,155 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: oidcclients.security.homelab.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+spec:
+  group: security.homelab.io
+  names:
+    kind: OIDCClient
+    listKind: OIDCClientList
+    plural: oidcclients
+    singular: oidcclient
+    shortNames:
+      - oidc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Client ID
+          type: string
+          jsonPath: .spec.clientId
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - clientId
+                - redirectUris
+              properties:
+                clientId:
+                  type: string
+                  description: Unique identifier for the OIDC client
+                clientName:
+                  type: string
+                  description: Display name for the client
+                redirectUris:
+                  type: array
+                  items:
+                    type: string
+                  minItems: 1
+                  description: Allowed redirect URIs
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                  default:
+                    - openid
+                    - profile
+                    - email
+                    - groups
+                responseTypes:
+                  type: array
+                  items:
+                    type: string
+                  default:
+                    - code
+                grantTypes:
+                  type: array
+                  items:
+                    type: string
+                  default:
+                    - authorization_code
+                responseModes:
+                  type: array
+                  items:
+                    type: string
+                  default:
+                    - form_post
+                    - query
+                    - fragment
+                userinfoSignedResponseAlg:
+                  type: string
+                  default: "none"
+                tokenEndpointAuthMethod:
+                  type: string
+                  description: Token endpoint authentication method
+                  default: "client_secret_basic"
+                  enum:
+                    - client_secret_basic
+                    - client_secret_post
+                    - none
+                requirePkce:
+                  type: boolean
+                  description: Require PKCE for authorization code flow
+                  default: false
+                pkceChallengeMethod:
+                  type: string
+                  description: PKCE challenge method
+                  default: "S256"
+                  enum:
+                    - S256
+                    - plain
+                secretRef:
+                  type: object
+                  description: Reference to an existing secret containing the client secret
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                    key:
+                      type: string
+                      default: client_secret
+                  required:
+                    - name
+                generateSecret:
+                  type: boolean
+                  description: Generate a random client secret
+                  default: true
+            status:
+              type: object
+              properties:
+                ready:
+                  type: boolean
+                secretName:
+                  type: string
+                lastSyncedAt:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string

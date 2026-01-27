@@ -1,0 +1,213 @@
+name: Update Helm Chart
+
+on:
+  release:
+    types: [published]
+  repository_dispatch:
+    types: [helm-chart-update]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to update (without v prefix)'
+        required: true
+        type: string
+      bump_chart_version:
+        description: 'Bump chart version'
+        required: false
+        type: boolean
+        default: true
+      version_bump_type:
+        description: 'Version bump type (auto, major, minor, patch)'
+        required: false
+        type: string
+        default: 'auto'
+
+jobs:
+  update-chart:
+    name: Update Helm Chart Version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          elif [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            VERSION="${{ github.event.client_payload.version }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Checkout operator repository
+        uses: actions/checkout@v4
+        with:
+          path: operator
+
+      - name: Checkout charts repository
+        uses: actions/checkout@v4
+        with:
+          repository: fredericrous/charts
+          token: ${{ secrets.CHARTS_REPO_TOKEN }}
+          path: charts
+
+      - name: Sync CRD from operator
+        run: |
+          echo "Syncing CRD from operator to chart..."
+          cp -v operator/config/crd/bases/security.homelab.io_oidcclients.yaml \
+               charts/charts/authelia-oidc-operator/crds/oidcclients-crd.yaml
+
+      - name: Update Chart.yaml
+        id: update-chart
+        run: |
+          cd charts
+          CHART_PATH="charts/authelia-oidc-operator/Chart.yaml"
+
+          CURRENT_CHART_VERSION=$(yq '.version' "$CHART_PATH")
+          CURRENT_APP_VERSION=$(yq '.appVersion' "$CHART_PATH")
+          NEW_APP_VERSION="${{ steps.version.outputs.version }}"
+
+          echo "Current state:"
+          echo "- Chart version: $CURRENT_CHART_VERSION"
+          echo "- App version: $CURRENT_APP_VERSION → $NEW_APP_VERSION"
+
+          yq -i ".appVersion = \"$NEW_APP_VERSION\"" "$CHART_PATH"
+
+          if [[ "${{ github.event.inputs.bump_chart_version }}" != "false" ]]; then
+            IFS='.' read -r CHART_MAJOR CHART_MINOR CHART_PATCH <<< "$CURRENT_CHART_VERSION"
+            IFS='.' read -r OLD_APP_MAJOR OLD_APP_MINOR OLD_APP_PATCH <<< "${CURRENT_APP_VERSION#v}"
+            IFS='.' read -r NEW_APP_MAJOR NEW_APP_MINOR NEW_APP_PATCH <<< "${NEW_APP_VERSION#v}"
+
+            BUMP_TYPE="${{ github.event.inputs.version_bump_type || 'auto' }}"
+
+            if [[ "$BUMP_TYPE" == "auto" ]]; then
+              if [[ "$NEW_APP_MAJOR" -gt "$OLD_APP_MAJOR" ]]; then
+                echo "Detected major version change in app"
+                NEW_CHART_VERSION="$((CHART_MAJOR + 1)).0.0"
+              elif [[ "$NEW_APP_MINOR" -gt "$OLD_APP_MINOR" ]]; then
+                echo "Detected minor version change in app"
+                NEW_CHART_VERSION="$CHART_MAJOR.$((CHART_MINOR + 1)).0"
+              else
+                echo "Detected patch version change in app"
+                NEW_CHART_VERSION="$CHART_MAJOR.$CHART_MINOR.$((CHART_PATCH + 1))"
+              fi
+            elif [[ "$BUMP_TYPE" == "major" ]]; then
+              NEW_CHART_VERSION="$((CHART_MAJOR + 1)).0.0"
+            elif [[ "$BUMP_TYPE" == "minor" ]]; then
+              NEW_CHART_VERSION="$CHART_MAJOR.$((CHART_MINOR + 1)).0"
+            else
+              NEW_CHART_VERSION="$CHART_MAJOR.$CHART_MINOR.$((CHART_PATCH + 1))"
+            fi
+
+            echo "Updating chart version: $CURRENT_CHART_VERSION → $NEW_CHART_VERSION"
+            yq -i ".version = \"$NEW_CHART_VERSION\"" "$CHART_PATH"
+            echo "chart_version=$NEW_CHART_VERSION" >> $GITHUB_OUTPUT
+            echo "version_bump_reason=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          else
+            CHART_VERSION=$(yq '.version' "$CHART_PATH")
+            echo "chart_version=$CHART_VERSION" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Updated Chart.yaml:"
+          cat "$CHART_PATH"
+
+      - name: Update README.md Chart Table
+        run: |
+          cd charts
+          README_FILE="README.md"
+          CHART_NAME="authelia-oidc-operator"
+          CHART_VERSION="${{ steps.update-chart.outputs.chart_version }}"
+          APP_VERSION="${{ steps.version.outputs.version }}"
+
+          if [ -f "$README_FILE" ]; then
+            if grep -q "\[${CHART_NAME}\]" "$README_FILE"; then
+              echo "Updating existing chart entry in README.md"
+              while IFS= read -r line; do
+                if [[ "$line" == *"[${CHART_NAME}]"* ]]; then
+                  echo "| [${CHART_NAME}](charts/${CHART_NAME}/) | ${CHART_VERSION} | ${APP_VERSION} | A Kubernetes operator that manages OIDC client configurations for Authelia |"
+                else
+                  echo "$line"
+                fi
+              done < "$README_FILE" > "$README_FILE.tmp" && mv "$README_FILE.tmp" "$README_FILE"
+            else
+              echo "Chart not found in README.md - manual intervention may be required"
+            fi
+          fi
+
+      - name: Create Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.CHARTS_REPO_TOKEN }}
+          path: charts
+          commit-message: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
+          title: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
+          body: |
+            ## Automated Chart Update
+
+            This PR updates the authelia-oidc-operator Helm chart:
+            - **appVersion**: `${{ steps.version.outputs.version }}`
+            - **Chart version**: `${{ steps.update-chart.outputs.chart_version }}`
+            - **Version bump type**: ${{ steps.update-chart.outputs.version_bump_reason }}
+
+            ### Files Updated
+            - `charts/authelia-oidc-operator/Chart.yaml` - Updated appVersion and chart version
+            - `charts/authelia-oidc-operator/crds/oidcclients-crd.yaml` - Synced CRD from operator
+            - `README.md` - Updated chart version and app version in charts table
+
+            ### What's Changed
+
+            ${{ github.event.release.body }}
+
+            ### Next Steps
+
+            After merging this PR, create a new release tag:
+            ```bash
+            git tag authelia-oidc-operator-v${{ steps.update-chart.outputs.chart_version }}
+            git push origin authelia-oidc-operator-v${{ steps.update-chart.outputs.chart_version }}
+            ```
+
+            ---
+            *This PR was automatically generated when [operator version ${{ steps.version.outputs.version }}](https://github.com/fredericrous/homelab/releases/tag/authelia-oidc-operator-v${{ steps.version.outputs.version }}) was released.*
+          branch: update-authelia-oidc-operator-${{ steps.version.outputs.version }}
+          base: main
+          labels: |
+            chart-update
+            automated
+            operator-release
+
+      - name: Add PR comment with testing instructions
+        if: steps.create-pr.outputs.pull-request-number
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.CHARTS_REPO_TOKEN }}
+          repository: fredericrous/charts
+          issue-number: ${{ steps.create-pr.outputs.pull-request-number }}
+          body: |
+            ### Testing Instructions
+
+            Test the updated chart locally:
+            ```bash
+            git clone https://github.com/fredericrous/charts.git
+            cd charts
+            git checkout update-authelia-oidc-operator-${{ steps.version.outputs.version }}
+
+            helm template authelia-oidc-operator ./charts/authelia-oidc-operator
+            helm lint ./charts/authelia-oidc-operator
+            helm install test-release ./charts/authelia-oidc-operator --dry-run --debug
+            ```
+
+      - name: Enable auto-merge
+        if: steps.create-pr.outputs.pull-request-number && github.event_name == 'release'
+        continue-on-error: true
+        run: |
+          sleep 5
+          gh pr merge ${{ steps.create-pr.outputs.pull-request-number }} \
+            --repo fredericrous/charts \
+            --auto \
+            --squash
+        env:
+          GH_TOKEN: ${{ secrets.CHARTS_REPO_TOKEN }}

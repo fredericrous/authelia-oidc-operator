@@ -1,0 +1,22 @@
+---
+apiVersion: security.homelab.io/v1alpha1
+kind: OIDCClient
+metadata:
+  name: myapp
+  namespace: myapp
+spec:
+  clientId: myapp
+  clientName: My Application
+  redirectUris:
+    - https://myapp.example.com/callback
+  scopes:
+    - openid
+    - profile
+    - email
+    - groups
+  responseTypes:
+    - code
+  grantTypes:
+    - authorization_code
+  # Generate a random secret
+  generateSecret: true
