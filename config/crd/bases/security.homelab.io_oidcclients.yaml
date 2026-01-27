@@ -124,9 +124,9 @@ spec:
                   enum:
                     - one_factor
                     - two_factor
-                sectorIdentifier:
+                sectorIdentifierUri:
                   type: string
-                  description: Sector identifier for pairwise subject identifier
+                  description: Sector identifier URI for pairwise subject identifier
                 preconfiguredConsentDuration:
                   type: string
                   description: Duration for pre-configured consent (e.g., "720h", "30d")

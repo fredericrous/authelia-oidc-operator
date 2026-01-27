@@ -27,7 +27,7 @@ spec:
   # Pre-configured consent for trusted internal services
   consentMode: pre-configured
   preconfiguredConsentDuration: "720h"  # 30 days
-  # Sector identifier for pairwise subject identifiers
-  sectorIdentifier: internal.example.com
+  # Sector identifier URI for pairwise subject identifiers
+  sectorIdentifierUri: https://internal.example.com
   # Token endpoint settings
   tokenEndpointAuthMethod: client_secret_basic

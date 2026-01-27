@@ -69,9 +69,9 @@ type OIDCClientSpec struct {
 	// +kubebuilder:validation:Enum=one_factor;two_factor
 	AuthorizationPolicy string `json:"authorizationPolicy,omitempty"`
 
-	// SectorIdentifier for pairwise subject identifier
+	// SectorIdentifierURI for pairwise subject identifier
 	// +optional
-	SectorIdentifier string `json:"sectorIdentifier,omitempty"`
+	SectorIdentifierURI string `json:"sectorIdentifierUri,omitempty"`
 
 	// PreconfiguredConsentDuration is the duration for pre-configured consent
 	// +optional

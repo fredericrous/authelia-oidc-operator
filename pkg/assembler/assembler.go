@@ -42,7 +42,7 @@ type ClientEntry struct {
 	ConsentMode                  string   `json:"consent_mode,omitempty"`
 	PreconfiguredConsentDuration string   `json:"pre_configured_consent_duration,omitempty"`
 	Audience                     []string `json:"audience,omitempty"`
-	SectorIdentifier             string   `json:"sector_identifier,omitempty"`
+	SectorIdentifierURI          string   `json:"sector_identifier_uri,omitempty"`
 	RedirectURIs                 []string `json:"redirect_uris"`
 	Scopes                       []string `json:"scopes"`
 	ResponseTypes                []string `json:"response_types"`
@@ -209,8 +209,8 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 		entry.ConsentMode = oc.Spec.ConsentMode
 	}
 
-	if oc.Spec.SectorIdentifier != "" {
-		entry.SectorIdentifier = oc.Spec.SectorIdentifier
+	if oc.Spec.SectorIdentifierURI != "" {
+		entry.SectorIdentifierURI = oc.Spec.SectorIdentifierURI
 	}
 
 	if len(oc.Spec.Audience) > 0 {
