@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -269,8 +270,9 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		return err
 	}
 
-	// Check if the config has changed
-	if existing.Data["configuration.yml"] == string(mergedYAML) {
+	// Check if the config has changed by comparing parsed YAML structures
+	// This avoids false positives from YAML formatting/ordering differences
+	if yamlContentEqual(existing.Data["configuration.yml"], string(mergedYAML)) {
 		log.V(1).Info("Authelia ConfigMap unchanged, skipping update")
 		return nil
 	}
@@ -279,6 +281,21 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 	existing.Labels = targetCM.Labels
 	log.Info("Updating Authelia ConfigMap", "name", r.Config.AutheliaConfigMapName)
 	return r.Update(ctx, existing)
+}
+
+// yamlContentEqual compares two YAML strings by parsing them and comparing the structures
+// This handles differences in formatting, key ordering, and whitespace
+func yamlContentEqual(a, b string) bool {
+	var aData, bData map[string]interface{}
+
+	if err := yaml.Unmarshal([]byte(a), &aData); err != nil {
+		return false
+	}
+	if err := yaml.Unmarshal([]byte(b), &bData); err != nil {
+		return false
+	}
+
+	return reflect.DeepEqual(aData, bData)
 }
 
 // enqueueRequestsForSecret returns a handler that enqueues OIDCClient objects
