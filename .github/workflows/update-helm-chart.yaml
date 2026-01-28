@@ -157,7 +157,7 @@ jobs:
           token: ${{ secrets.CHARTS_REPO_TOKEN }}
           path: charts
           add-paths: |
-            charts/authelia-oidc-operator/**
+            charts/${{ github.event.repository.name }}/**
             README.md
           commit-message: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
           title: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
