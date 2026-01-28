@@ -2,12 +2,12 @@ apiVersion: v2
 name: authelia-oidc-operator
 description: A Kubernetes operator that manages OIDC client configurations for Authelia
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.1.2
+appVersion: "0.1.2"
 kubeVersion: ">=1.28.0-0"
-home: https://github.com/fredericrous/homelab/tree/main/authelia-oidc-operator
+home: https://github.com/fredericrous/authelia-oidc-operator
 sources:
-  - https://github.com/fredericrous/homelab/tree/main/authelia-oidc-operator
+  - https://github.com/fredericrous/authelia-oidc-operator
 maintainers:
   - name: fredericrous
     url: https://github.com/fredericrous
