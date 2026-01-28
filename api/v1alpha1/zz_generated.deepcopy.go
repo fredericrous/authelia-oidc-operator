@@ -81,6 +81,11 @@ func (in *OIDCClientSpec) DeepCopyInto(out *OIDCClientSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.Audience != nil {
+		in, out := &in.Audience, &out.Audience
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.ResponseTypes != nil {
 		in, out := &in.ResponseTypes, &out.ResponseTypes
 		*out = make([]string, len(*in))
@@ -95,6 +100,11 @@ func (in *OIDCClientSpec) DeepCopyInto(out *OIDCClientSpec) {
 		in, out := &in.ResponseModes, &out.ResponseModes
 		*out = make([]string, len(*in))
 		copy(*out, *in)
+	}
+	if in.PreconfiguredConsentDuration != nil {
+		in, out := &in.PreconfiguredConsentDuration, &out.PreconfiguredConsentDuration
+		*out = new(v1.Duration)
+		**out = **in
 	}
 	if in.SecretRef != nil {
 		in, out := &in.SecretRef, &out.SecretRef

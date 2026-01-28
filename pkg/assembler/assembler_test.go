@@ -168,7 +168,7 @@ func TestBuildConfigYAMLWithJWKS(t *testing.T) {
 
 	oidcSecrets := &corev1.Secret{
 		Data: map[string][]byte{
-			"issuer_private_key":      []byte("-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"),
+			"issuer_private_key":       []byte("-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"),
 			"issuer_certificate_chain": []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"),
 		},
 	}
