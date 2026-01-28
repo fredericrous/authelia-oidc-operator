@@ -2,8 +2,9 @@ package controllers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -246,56 +247,66 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		return operrors.NewPermanentError("failed to marshal merged config", err)
 	}
 
-	// Create or update the target ConfigMap
-	targetCM := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.Config.AutheliaConfigMapName,
-			Namespace: r.Config.AutheliaNamespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "authelia-oidc-operator",
-			},
-		},
-		Data: map[string]string{
-			"configuration.yml": string(mergedYAML),
-		},
-	}
+	// Compute hash of the OIDC config to detect changes
+	oidcConfigHash := computeHash(result.ConfigYAML)
 
 	existing := &corev1.ConfigMap{}
 	err = r.Get(ctx, types.NamespacedName{Name: r.Config.AutheliaConfigMapName, Namespace: r.Config.AutheliaNamespace}, existing)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			// Create new ConfigMap
+			targetCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      r.Config.AutheliaConfigMapName,
+					Namespace: r.Config.AutheliaNamespace,
+					Labels: map[string]string{
+						"app.kubernetes.io/managed-by": "authelia-oidc-operator",
+					},
+					Annotations: map[string]string{
+						"authelia.homelab.io/oidc-config-hash": oidcConfigHash,
+					},
+				},
+				Data: map[string]string{
+					"configuration.yml": string(mergedYAML),
+				},
+			}
 			log.Info("Creating Authelia ConfigMap", "name", r.Config.AutheliaConfigMapName)
 			return r.Create(ctx, targetCM)
 		}
 		return err
 	}
 
-	// Check if the config has changed by comparing parsed YAML structures
-	// This avoids false positives from YAML formatting/ordering differences
-	if yamlContentEqual(existing.Data["configuration.yml"], string(mergedYAML)) {
-		log.V(1).Info("Authelia ConfigMap unchanged, skipping update")
+	// Check if the OIDC config hash has changed
+	existingHash := ""
+	if existing.Annotations != nil {
+		existingHash = existing.Annotations["authelia.homelab.io/oidc-config-hash"]
+	}
+
+	if existingHash == oidcConfigHash {
+		log.V(1).Info("Authelia ConfigMap unchanged (hash match), skipping update")
 		return nil
 	}
 
-	existing.Data = targetCM.Data
-	existing.Labels = targetCM.Labels
-	log.Info("Updating Authelia ConfigMap", "name", r.Config.AutheliaConfigMapName)
+	// Update ConfigMap
+	existing.Data = map[string]string{
+		"configuration.yml": string(mergedYAML),
+	}
+	if existing.Labels == nil {
+		existing.Labels = make(map[string]string)
+	}
+	existing.Labels["app.kubernetes.io/managed-by"] = "authelia-oidc-operator"
+	if existing.Annotations == nil {
+		existing.Annotations = make(map[string]string)
+	}
+	existing.Annotations["authelia.homelab.io/oidc-config-hash"] = oidcConfigHash
+	log.Info("Updating Authelia ConfigMap", "name", r.Config.AutheliaConfigMapName, "hash", oidcConfigHash)
 	return r.Update(ctx, existing)
 }
 
-// yamlContentEqual compares two YAML strings by parsing them and comparing the structures
-// This handles differences in formatting, key ordering, and whitespace
-func yamlContentEqual(a, b string) bool {
-	var aData, bData map[string]interface{}
-
-	if err := yaml.Unmarshal([]byte(a), &aData); err != nil {
-		return false
-	}
-	if err := yaml.Unmarshal([]byte(b), &bData); err != nil {
-		return false
-	}
-
-	return reflect.DeepEqual(aData, bData)
+// computeHash computes a SHA256 hash of the given string
+func computeHash(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 // enqueueRequestsForSecret returns a handler that enqueues OIDCClient objects
