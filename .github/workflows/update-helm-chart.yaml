@@ -68,6 +68,11 @@ jobs:
           cp -v operator/config/crd/bases/security.homelab.io_oidcclients.yaml \
                charts/charts/authelia-oidc-operator/crds/oidcclients-crd.yaml
 
+          # Verify the copy and show diff
+          cd charts
+          git diff --stat || true
+          git status
+
       - name: Update Chart.yaml
         id: update-chart
         run: |
@@ -151,6 +156,9 @@ jobs:
         with:
           token: ${{ secrets.CHARTS_REPO_TOKEN }}
           path: charts
+          add-paths: |
+            charts/authelia-oidc-operator/**
+            README.md
           commit-message: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
           title: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
           body: |
