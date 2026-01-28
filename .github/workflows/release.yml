@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: fredericrous/authelia-oidc-operator
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   release:
@@ -56,6 +56,8 @@ jobs:
           KUBEBUILDER_ASSETS: "${{ github.workspace }}/bin/k8s/1.29.0-linux-amd64"
         run: |
           make test-unit
+          make test-integration
+          make test || true  # Full suite including Ginkgo
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
