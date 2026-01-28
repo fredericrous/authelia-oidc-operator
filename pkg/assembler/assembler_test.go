@@ -76,7 +76,7 @@ func TestBuildClientEntry(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entry := a.buildClientEntry(tt.oidcClient, tt.clientSecret)
+			entry, _ := a.buildClientEntry(tt.oidcClient, tt.clientSecret, "")
 
 			if entry.ClientID != tt.wantID {
 				t.Errorf("ClientID = %v, want %v", entry.ClientID, tt.wantID)
@@ -104,7 +104,7 @@ func TestBuildClientEntryDefaults(t *testing.T) {
 		},
 	}
 
-	entry := a.buildClientEntry(oidcClient, "secret")
+	entry, _ := a.buildClientEntry(oidcClient, "secret", "")
 
 	// Check defaults
 	if entry.AuthorizationPolicy != "two_factor" {
@@ -304,14 +304,14 @@ func TestGenerateSecret(t *testing.T) {
 
 func TestHashSecretPBKDF2(t *testing.T) {
 	secret := "my-test-secret"
-	hashed := hashSecretPBKDF2(secret)
+	result := hashSecretPBKDF2(secret, "")
 
 	// Check the format: $pbkdf2-sha512$<iterations>$<salt>$<hash>
-	if !strings.HasPrefix(hashed, "$pbkdf2-sha512$") {
-		t.Errorf("hashed secret should start with $pbkdf2-sha512$, got %v", hashed)
+	if !strings.HasPrefix(result.Hash, "$pbkdf2-sha512$") {
+		t.Errorf("hashed secret should start with $pbkdf2-sha512$, got %v", result.Hash)
 	}
 
-	parts := strings.Split(hashed, "$")
+	parts := strings.Split(result.Hash, "$")
 	if len(parts) != 5 {
 		t.Errorf("hashed secret should have 5 parts (empty, algo, iterations, salt, hash), got %d", len(parts))
 	}
@@ -326,10 +326,21 @@ func TestHashSecretPBKDF2(t *testing.T) {
 		t.Error("salt and hash should not be empty")
 	}
 
-	// Same secret should produce different hashes (different salts)
-	hashed2 := hashSecretPBKDF2(secret)
-	if hashed == hashed2 {
+	// Salt should be returned in result
+	if result.Salt == "" {
+		t.Error("Salt should be returned in result")
+	}
+
+	// Same secret should produce different hashes (different salts) when no existing salt provided
+	result2 := hashSecretPBKDF2(secret, "")
+	if result.Hash == result2.Hash {
 		t.Error("hashing the same secret twice should produce different results (different salts)")
+	}
+
+	// Same secret with same salt should produce identical hash
+	result3 := hashSecretPBKDF2(secret, result.Salt)
+	if result.Hash != result3.Hash {
+		t.Error("hashing the same secret with same salt should produce identical hash")
 	}
 }
 
