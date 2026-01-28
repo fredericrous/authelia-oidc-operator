@@ -62,15 +62,22 @@ type AssemblyResult struct {
 	// GeneratedSecrets contains secrets that were generated for clients
 	GeneratedSecrets map[string]string
 
+	// ClientSalts contains the salts used for hashing each client's secret (keyed by clientId)
+	ClientSalts map[string]string
+
 	// ConfigYAML is the assembled Authelia configuration YAML
 	ConfigYAML string
 }
+
+// SaltAnnotationKey is the annotation key used to store the salt for PBKDF2 hashing
+const SaltAnnotationKey = "authelia.homelab.io/secret-salt"
 
 // Assemble processes all OIDCClients and assembles the Authelia configuration
 func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1.OIDCClient, oidcSecrets *corev1.Secret) (*AssemblyResult, error) {
 	result := &AssemblyResult{
 		Clients:          make([]ClientEntry, 0, len(oidcClients)),
 		GeneratedSecrets: make(map[string]string),
+		ClientSalts:      make(map[string]string),
 	}
 
 	for _, oc := range oidcClients {
@@ -80,8 +87,15 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 				WithContext("clientId", oc.Spec.ClientID)
 		}
 
-		entry := a.buildClientEntry(&oc, clientSecret)
+		// Get existing salt from annotation if available
+		existingSalt := ""
+		if oc.ObjectMeta.Annotations != nil {
+			existingSalt = oc.ObjectMeta.Annotations[SaltAnnotationKey]
+		}
+
+		entry, salt := a.buildClientEntry(&oc, clientSecret, existingSalt)
 		result.Clients = append(result.Clients, entry)
+		result.ClientSalts[oc.Spec.ClientID] = salt
 	}
 
 	// Build the OIDC configuration section
@@ -141,7 +155,8 @@ func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha
 }
 
 // buildClientEntry builds a client entry from an OIDCClient
-func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecret string) ClientEntry {
+// Returns the client entry and the salt used for hashing
+func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecret string, existingSalt string) (ClientEntry, string) {
 	// Apply defaults
 	scopes := oc.Spec.Scopes
 	if len(scopes) == 0 {
@@ -222,11 +237,14 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 	}
 
 	// Only set client secret for non-public clients
+	var salt string
 	if !oc.Spec.Public && clientSecret != "" {
-		entry.ClientSecret = hashSecretPBKDF2(clientSecret)
+		hashResult := hashSecretPBKDF2(clientSecret, existingSalt)
+		entry.ClientSecret = hashResult.Hash
+		salt = hashResult.Salt
 	}
 
-	return entry
+	return entry, salt
 }
 
 // buildConfigYAML builds the Authelia OIDC configuration YAML
@@ -279,13 +297,33 @@ func generateSecret() string {
 // PHC B64 encoding: standard base64 with . instead of + and no padding
 var phcB64Encoding = base64.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./").WithPadding(base64.NoPadding)
 
+// HashResult contains the hash and the salt used
+type HashResult struct {
+	Hash string
+	Salt string
+}
+
 // hashSecretPBKDF2 hashes a secret using PBKDF2-SHA512 in Authelia's expected format
 // Format: $pbkdf2-sha512$<iterations>$<salt-b64>$<hash-b64>
-func hashSecretPBKDF2(secret string) string {
+// If existingSalt is provided, it will be used instead of generating a new one
+func hashSecretPBKDF2(secret string, existingSalt string) HashResult {
 	iterations := 310000
-	saltBytes := make([]byte, 16)
-	if _, err := rand.Read(saltBytes); err != nil {
-		return secret
+	var saltBytes []byte
+
+	if existingSalt != "" {
+		// Decode existing salt
+		decoded, err := phcB64Encoding.DecodeString(existingSalt)
+		if err == nil && len(decoded) == 16 {
+			saltBytes = decoded
+		}
+	}
+
+	// Generate new salt if we don't have a valid one
+	if len(saltBytes) != 16 {
+		saltBytes = make([]byte, 16)
+		if _, err := rand.Read(saltBytes); err != nil {
+			return HashResult{Hash: secret, Salt: ""}
+		}
 	}
 
 	hash := pbkdf2.Key([]byte(secret), saltBytes, iterations, 64, sha512.New)
@@ -293,5 +331,8 @@ func hashSecretPBKDF2(secret string) string {
 	saltB64 := phcB64Encoding.EncodeToString(saltBytes)
 	hashB64 := phcB64Encoding.EncodeToString(hash)
 
-	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", iterations, saltB64, hashB64)
+	return HashResult{
+		Hash: fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", iterations, saltB64, hashB64),
+		Salt: saltB64,
+	}
 }

@@ -126,10 +126,31 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Update status for all OIDCClients
+	// Update status and salt annotations for all OIDCClients
 	now := metav1.Now()
 	for i := range oidcClientList.Items {
 		oc := &oidcClientList.Items[i]
+
+		// Update salt annotation if we have a new salt
+		if salt, ok := result.ClientSalts[oc.Spec.ClientID]; ok && salt != "" {
+			currentSalt := ""
+			if oc.ObjectMeta.Annotations != nil {
+				currentSalt = oc.ObjectMeta.Annotations[assembler.SaltAnnotationKey]
+			}
+
+			// Only update if salt changed
+			if currentSalt != salt {
+				if oc.ObjectMeta.Annotations == nil {
+					oc.ObjectMeta.Annotations = make(map[string]string)
+				}
+				oc.ObjectMeta.Annotations[assembler.SaltAnnotationKey] = salt
+				if err := r.Update(ctx, oc); err != nil {
+					log.Error(err, "Failed to update OIDCClient salt annotation", "clientId", oc.Spec.ClientID)
+				}
+			}
+		}
+
+		// Update status
 		oc.Status.Ready = true
 		oc.Status.LastSyncedAt = &now
 		if err := r.Status().Update(ctx, oc); err != nil {
