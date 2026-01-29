@@ -212,9 +212,13 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 		}
 	}
 
-	pkceChallengeMethod := oc.Spec.PKCEChallengeMethod
-	if pkceChallengeMethod == "" {
-		pkceChallengeMethod = "S256"
+	// Only set PKCE challenge method if PKCE is required
+	pkceChallengeMethod := ""
+	if oc.Spec.RequirePKCE {
+		pkceChallengeMethod = oc.Spec.PKCEChallengeMethod
+		if pkceChallengeMethod == "" {
+			pkceChallengeMethod = "S256"
+		}
 	}
 
 	clientName := oc.Spec.ClientName
