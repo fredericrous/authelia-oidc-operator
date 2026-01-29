@@ -20,6 +20,18 @@ var _ = Describe("OIDCClient Controller Integration", func() {
 
 	Context("When creating an OIDCClient", func() {
 		It("Should create the client and update status", func() {
+			By("Creating a secret for the client")
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-client-secret",
+					Namespace: "authelia",
+				},
+				StringData: map[string]string{
+					"client_secret": "test-secret-value",
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).Should(Succeed())
+
 			By("Creating a new OIDCClient")
 			oidcClient := &securityv1alpha1.OIDCClient{
 				TypeMeta: metav1.TypeMeta{
@@ -34,6 +46,10 @@ var _ = Describe("OIDCClient Controller Integration", func() {
 					ClientID:     "test-client-id",
 					ClientName:   "Test Client",
 					RedirectURIs: []string{"https://app.example.com/callback"},
+					SecretRef: &securityv1alpha1.SecretReference{
+						Name: "test-client-secret",
+						Key:  "client_secret",
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, oidcClient)).Should(Succeed())
@@ -93,6 +109,7 @@ var _ = Describe("OIDCClient Controller Integration", func() {
 					RedirectURIs: []string{"https://app2.example.com/callback"},
 					SecretRef: &securityv1alpha1.SecretReference{
 						Name: "my-client-secret",
+						Key:  "client_secret",
 					},
 				},
 			}
@@ -151,6 +168,18 @@ var _ = Describe("OIDCClient Controller Integration", func() {
 
 	Context("When updating an OIDCClient", func() {
 		It("Should reconcile on updates", func() {
+			By("Creating a secret for the update test client")
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "update-test-secret",
+					Namespace: "authelia",
+				},
+				StringData: map[string]string{
+					"client_secret": "update-test-secret-value",
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).Should(Succeed())
+
 			By("Creating an OIDCClient")
 			oidcClient := &securityv1alpha1.OIDCClient{
 				TypeMeta: metav1.TypeMeta{
@@ -165,6 +194,10 @@ var _ = Describe("OIDCClient Controller Integration", func() {
 					ClientID:     "update-test-id",
 					ClientName:   "Update Test Client",
 					RedirectURIs: []string{"https://app3.example.com/callback"},
+					SecretRef: &securityv1alpha1.SecretReference{
+						Name: "update-test-secret",
+						Key:  "client_secret",
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, oidcClient)).Should(Succeed())
