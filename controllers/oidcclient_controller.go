@@ -105,7 +105,7 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Assemble the configuration
-	result, err := r.Assembler.Assemble(ctx, oidcClientList.Items, oidcSecrets)
+	result, err := r.Assembler.Assemble(ctx, oidcClientList.Items, oidcSecrets, r.Config.AutheliaNamespace)
 	if err != nil {
 		r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeWarning, "AssemblyFailed", err.Error())
 		if operrors.ShouldRetry(err) {

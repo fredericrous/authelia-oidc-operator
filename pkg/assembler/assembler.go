@@ -69,14 +69,14 @@ type AssemblyResult struct {
 }
 
 // Assemble processes all OIDCClients and assembles the Authelia configuration
-func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1.OIDCClient, oidcSecrets *corev1.Secret) (*AssemblyResult, error) {
+func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1.OIDCClient, oidcSecrets *corev1.Secret, autheliaNamespace string) (*AssemblyResult, error) {
 	result := &AssemblyResult{
 		Clients:          make([]ClientEntry, 0, len(oidcClients)),
 		GeneratedSecrets: make(map[string]string),
 	}
 
 	for _, oc := range oidcClients {
-		clientSecret, err := a.resolveClientSecret(ctx, &oc, result.GeneratedSecrets)
+		clientSecret, err := a.resolveClientSecret(ctx, &oc, result.GeneratedSecrets, autheliaNamespace)
 		if err != nil {
 			return nil, operrors.NewTransientError("failed to resolve client secret", err).
 				WithContext("clientId", oc.Spec.ClientID)
@@ -96,8 +96,8 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 	return result, nil
 }
 
-// resolveClientSecret resolves the client secret from secretRef or generates one
-func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha1.OIDCClient, generatedSecrets map[string]string) (string, error) {
+// resolveClientSecret resolves the client secret from secretRef, existing generated secret, or generates a new one
+func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha1.OIDCClient, generatedSecrets map[string]string, autheliaNamespace string) (string, error) {
 	// Public clients don't need a secret
 	if oc.Spec.Public {
 		return "", nil
@@ -136,7 +136,23 @@ func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha
 		return string(secretValue), nil
 	}
 
+	// Check for existing operator-generated secret
+	existingSecretName := fmt.Sprintf("oidc-%s-client", oc.Spec.ClientID)
+	existingSecret := &corev1.Secret{}
+	err := a.Client.Get(ctx, types.NamespacedName{
+		Name:      existingSecretName,
+		Namespace: autheliaNamespace,
+	}, existingSecret)
+	if err == nil {
+		// Found existing generated secret, use it
+		if secretValue, ok := existingSecret.Data["client_secret"]; ok {
+			a.Log.V(1).Info("Using existing generated secret", "clientId", oc.Spec.ClientID)
+			return string(secretValue), nil
+		}
+	}
+
 	// Generate a new secret
+	a.Log.Info("Generating new client secret", "clientId", oc.Spec.ClientID)
 	clientSecret := generateSecret()
 	generatedSecrets[oc.Spec.ClientID] = clientSecret
 	return clientSecret, nil

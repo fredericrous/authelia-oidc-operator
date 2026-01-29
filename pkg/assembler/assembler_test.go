@@ -202,7 +202,7 @@ func TestResolveClientSecretPublic(t *testing.T) {
 	}
 
 	generatedSecrets := make(map[string]string)
-	secret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets)
+	secret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets, "default")
 	if err != nil {
 		t.Fatalf("resolveClientSecret() error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestResolveClientSecretFromRef(t *testing.T) {
 	}
 
 	generatedSecrets := make(map[string]string)
-	resolvedSecret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets)
+	resolvedSecret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets, "default")
 	if err != nil {
 		t.Fatalf("resolveClientSecret() error = %v", err)
 	}
@@ -274,7 +274,7 @@ func TestResolveClientSecretGenerated(t *testing.T) {
 	}
 
 	generatedSecrets := make(map[string]string)
-	secret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets)
+	secret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets, "default")
 	if err != nil {
 		t.Fatalf("resolveClientSecret() error = %v", err)
 	}
@@ -372,7 +372,7 @@ func TestAssemble(t *testing.T) {
 		},
 	}
 
-	result, err := a.Assemble(context.Background(), oidcClients, nil)
+	result, err := a.Assemble(context.Background(), oidcClients, nil, "default")
 	if err != nil {
 		t.Fatalf("Assemble() error = %v", err)
 	}
