@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
+	"sort"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/crypto/pbkdf2"
@@ -75,7 +76,14 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 		GeneratedSecrets: make(map[string]string),
 	}
 
-	for _, oc := range oidcClients {
+	// Sort OIDCClients by ClientID for deterministic output
+	sortedClients := make([]securityv1alpha1.OIDCClient, len(oidcClients))
+	copy(sortedClients, oidcClients)
+	sort.Slice(sortedClients, func(i, j int) bool {
+		return sortedClients[i].Spec.ClientID < sortedClients[j].Spec.ClientID
+	})
+
+	for _, oc := range sortedClients {
 		clientSecret, err := a.resolveClientSecret(ctx, &oc, result.GeneratedSecrets, autheliaNamespace)
 		if err != nil {
 			return nil, operrors.NewTransientError("failed to resolve client secret", err).
