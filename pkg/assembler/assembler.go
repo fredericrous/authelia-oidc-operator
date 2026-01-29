@@ -359,8 +359,8 @@ func (a *Assembler) buildConfigYAML(result *AssemblyResult) (string, error) {
 	return string(yamlBytes), nil
 }
 
-// PHC B64 encoding: standard base64 with . instead of + and no padding
-var phcB64Encoding = base64.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./").WithPadding(base64.NoPadding)
+// PHC B64 encoding: standard base64 without padding (RFC 4648)
+var phcB64Encoding = base64.RawStdEncoding
 
 // hashSecretPBKDF2 hashes a secret using PBKDF2-SHA512 in Authelia's expected format
 func hashSecretPBKDF2(secret, clientID string) string {
