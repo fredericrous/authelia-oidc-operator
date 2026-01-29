@@ -1,4 +1,6 @@
 ---
+# Basic example of an OIDC client with secretRef
+# The secret should be created via ExternalSecrets or manually
 apiVersion: security.homelab.io/v1alpha1
 kind: OIDCClient
 metadata:
@@ -7,6 +9,10 @@ metadata:
 spec:
   clientId: myapp
   clientName: My Application
+  # Reference the secret containing the client_secret
+  secretRef:
+    name: myapp-oidc-secret
+    key: client_secret
   redirectUris:
     - https://myapp.example.com/callback
   scopes:
@@ -18,5 +24,3 @@ spec:
     - code
   grantTypes:
     - authorization_code
-  # Generate a random secret
-  generateSecret: true
