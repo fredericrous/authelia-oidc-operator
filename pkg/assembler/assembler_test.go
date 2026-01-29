@@ -160,16 +160,21 @@ func TestBuildClientEntryDefaults(t *testing.T) {
 func TestBuildConfigYAML(t *testing.T) {
 	a := &Assembler{Log: logr.Discard()}
 
-	clients := []ClientEntry{
-		{
-			ClientID:     "test-client",
-			ClientName:   "Test Client",
-			RedirectURIs: []string{"https://example.com/callback"},
-			Scopes:       []string{"openid", "profile"},
+	result := &AssemblyResult{
+		Clients: []ClientEntry{
+			{
+				ClientID:     "test-client",
+				ClientName:   "Test Client",
+				RedirectURIs: []string{"https://example.com/callback"},
+				Scopes:       []string{"openid", "profile"},
+			},
 		},
+		ClaimsPolicies: make(map[string]ClaimsPolicyEntry),
+		Scopes:         make(map[string]ScopeEntry),
+		UserAttributes: make(map[string]UserAttributeEntry),
 	}
 
-	configYAML, err := a.buildConfigYAML(clients, nil)
+	configYAML, err := a.buildConfigYAML(result)
 	if err != nil {
 		t.Fatalf("buildConfigYAML() error = %v", err)
 	}
@@ -192,21 +197,27 @@ func TestBuildConfigYAML(t *testing.T) {
 func TestBuildConfigYAMLWithJWKS(t *testing.T) {
 	a := &Assembler{Log: logr.Discard()}
 
-	clients := []ClientEntry{
-		{
-			ClientID:     "test-client",
-			RedirectURIs: []string{"https://example.com"},
+	result := &AssemblyResult{
+		Clients: []ClientEntry{
+			{
+				ClientID:     "test-client",
+				RedirectURIs: []string{"https://example.com"},
+			},
+		},
+		ClaimsPolicies: make(map[string]ClaimsPolicyEntry),
+		Scopes:         make(map[string]ScopeEntry),
+		UserAttributes: make(map[string]UserAttributeEntry),
+		JWKS: []map[string]any{
+			{
+				"algorithm":         "RS256",
+				"use":               "sig",
+				"key":               "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
+				"certificate_chain": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+			},
 		},
 	}
 
-	oidcSecrets := &corev1.Secret{
-		Data: map[string][]byte{
-			"issuer_private_key":       []byte("-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"),
-			"issuer_certificate_chain": []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"),
-		},
-	}
-
-	configYAML, err := a.buildConfigYAML(clients, oidcSecrets)
+	configYAML, err := a.buildConfigYAML(result)
 	if err != nil {
 		t.Fatalf("buildConfigYAML() error = %v", err)
 	}
@@ -400,7 +411,7 @@ func TestAssemble(t *testing.T) {
 		},
 	}
 
-	result, err := a.Assemble(context.Background(), oidcClients, nil)
+	result, err := a.Assemble(context.Background(), oidcClients, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Assemble() error = %v", err)
 	}
@@ -464,7 +475,7 @@ func TestAssembleConfidentialClientWithoutSecretRef(t *testing.T) {
 		},
 	}
 
-	_, err := a.Assemble(context.Background(), oidcClients, nil)
+	_, err := a.Assemble(context.Background(), oidcClients, nil, nil, nil)
 	if err == nil {
 		t.Fatal("Assemble() should fail for confidential client without secretRef")
 	}

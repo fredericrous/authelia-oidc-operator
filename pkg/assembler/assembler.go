@@ -1,11 +1,12 @@
 package assembler
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/crypto/pbkdf2"
@@ -26,10 +27,7 @@ type Assembler struct {
 
 // NewAssembler creates a new Assembler
 func NewAssembler(client client.Client, log logr.Logger) *Assembler {
-	return &Assembler{
-		Client: client,
-		Log:    log,
-	}
+	return &Assembler{Client: client, Log: log}
 }
 
 // ClientEntry represents an OIDC client entry for Authelia configuration
@@ -56,26 +54,69 @@ type ClientEntry struct {
 	PKCEChallengeMethod          string   `json:"pkce_challenge_method,omitempty"`
 }
 
-// AssemblyResult contains the result of OIDC configuration assembly
-type AssemblyResult struct {
-	// Clients is the list of assembled OIDC client entries
-	Clients []ClientEntry
-
-	// ConfigYAML is the assembled Authelia configuration YAML
-	ConfigYAML string
+// ClaimsPolicyEntry represents a claims policy entry for Authelia configuration
+type ClaimsPolicyEntry struct {
+	IDToken       []string               `json:"id_token,omitempty"`
+	Userinfo      []string               `json:"userinfo,omitempty"`
+	AccessToken   []string               `json:"access_token,omitempty"`
+	Introspection []string               `json:"introspection,omitempty"`
+	CustomClaims  map[string]any `json:"custom_claims,omitempty"`
 }
 
-// Assemble processes all OIDCClients and assembles the Authelia configuration
-func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1.OIDCClient, oidcSecrets *corev1.Secret) (*AssemblyResult, error) {
-	result := &AssemblyResult{
-		Clients: make([]ClientEntry, 0, len(oidcClients)),
+// ScopeEntry represents a custom scope entry for Authelia configuration
+type ScopeEntry struct {
+	Claims []string `json:"claims"`
+}
+
+// UserAttributeEntry represents a user attribute entry for Authelia configuration
+type UserAttributeEntry struct {
+	Expression string `json:"expression"`
+}
+
+// AssemblyResult contains the result of OIDC configuration assembly
+type AssemblyResult struct {
+	Clients        []ClientEntry
+	ClaimsPolicies map[string]ClaimsPolicyEntry
+	Scopes         map[string]ScopeEntry
+	UserAttributes map[string]UserAttributeEntry
+	JWKS           []map[string]any
+	ConfigYAML     string
+}
+
+// Default values for OIDC clients
+var (
+	defaultScopes        = []string{"openid", "profile", "email", "groups"}
+	defaultResponseTypes = []string{"code"}
+	defaultGrantTypes    = []string{"authorization_code"}
+	defaultResponseModes = []string{"form_post", "query", "fragment"}
+)
+
+// Assemble processes all OIDCClients, ClaimsPolicies, and UserAttributes
+// and assembles the Authelia configuration
+func (a *Assembler) Assemble(
+	ctx context.Context,
+	oidcClients []securityv1alpha1.OIDCClient,
+	claimsPolicies []securityv1alpha1.ClaimsPolicy,
+	userAttributes []securityv1alpha1.UserAttribute,
+	oidcSecrets *corev1.Secret,
+) (*AssemblyResult, error) {
+	// Validate all references and collisions
+	if err := a.validate(oidcClients, claimsPolicies, userAttributes); err != nil {
+		return nil, err
 	}
 
-	// Sort OIDCClients by ClientID for deterministic output
-	sortedClients := make([]securityv1alpha1.OIDCClient, len(oidcClients))
-	copy(sortedClients, oidcClients)
-	sort.Slice(sortedClients, func(i, j int) bool {
-		return sortedClients[i].Spec.ClientID < sortedClients[j].Spec.ClientID
+	result := &AssemblyResult{
+		Clients:        make([]ClientEntry, 0, len(oidcClients)),
+		ClaimsPolicies: a.buildClaimsPolicies(claimsPolicies),
+		Scopes:         a.buildScopes(claimsPolicies),
+		UserAttributes: a.buildUserAttributes(userAttributes),
+		JWKS:           a.buildJWKS(oidcSecrets),
+	}
+
+	// Build clients (sorted by ClientID for deterministic output)
+	sortedClients := slices.Clone(oidcClients)
+	slices.SortFunc(sortedClients, func(a, b securityv1alpha1.OIDCClient) int {
+		return cmp.Compare(a.Spec.ClientID, b.Spec.ClientID)
 	})
 
 	for _, oc := range sortedClients {
@@ -84,13 +125,11 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 			return nil, operrors.NewTransientError("failed to resolve client secret", err).
 				WithContext("clientId", oc.Spec.ClientID)
 		}
-
-		entry := a.buildClientEntry(&oc, clientSecret)
-		result.Clients = append(result.Clients, entry)
+		result.Clients = append(result.Clients, a.buildClientEntry(&oc, clientSecret))
 	}
 
 	// Build the OIDC configuration section
-	configYAML, err := a.buildConfigYAML(result.Clients, oidcSecrets)
+	configYAML, err := a.buildConfigYAML(result)
 	if err != nil {
 		return nil, operrors.NewPermanentError("failed to build config YAML", err)
 	}
@@ -99,43 +138,121 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 	return result, nil
 }
 
+// validate runs all validation checks
+func (a *Assembler) validate(
+	oidcClients []securityv1alpha1.OIDCClient,
+	claimsPolicies []securityv1alpha1.ClaimsPolicy,
+	userAttributes []securityv1alpha1.UserAttribute,
+) error {
+	validators := []func() error{
+		func() error { return a.DetectPolicyNameCollisions(claimsPolicies) },
+		func() error { return a.DetectAttributeNameCollisions(userAttributes) },
+		func() error { return a.DetectScopeNameCollisions(claimsPolicies) },
+		func() error { return a.ValidateClaimsPolicies(claimsPolicies, userAttributes) },
+		func() error { return a.ValidateOIDCClientPolicies(oidcClients, claimsPolicies) },
+	}
+
+	for _, validate := range validators {
+		if err := validate(); err != nil {
+			return operrors.NewConfigError(err.Error(), nil)
+		}
+	}
+	return nil
+}
+
+// buildUserAttributes transforms UserAttribute CRDs to config entries
+func (a *Assembler) buildUserAttributes(attrs []securityv1alpha1.UserAttribute) map[string]UserAttributeEntry {
+	result := make(map[string]UserAttributeEntry, len(attrs))
+	for i := range attrs {
+		attr := &attrs[i]
+		result[attr.GetResolvedName()] = UserAttributeEntry{Expression: attr.Spec.Expression}
+	}
+	return result
+}
+
+// buildClaimsPolicies transforms ClaimsPolicy CRDs to config entries
+func (a *Assembler) buildClaimsPolicies(policies []securityv1alpha1.ClaimsPolicy) map[string]ClaimsPolicyEntry {
+	result := make(map[string]ClaimsPolicyEntry, len(policies))
+	for i := range policies {
+		policy := &policies[i]
+		result[policy.GetResolvedName()] = a.buildClaimsPolicyEntry(policy)
+	}
+	return result
+}
+
+// buildScopes extracts custom scopes from ClaimsPolicy CRDs
+func (a *Assembler) buildScopes(policies []securityv1alpha1.ClaimsPolicy) map[string]ScopeEntry {
+	result := make(map[string]ScopeEntry)
+	for i := range policies {
+		policy := &policies[i]
+		if policy.Spec.CustomScope != nil {
+			result[policy.GetScopeName()] = ScopeEntry{Claims: policy.Spec.CustomScope.Claims}
+		}
+	}
+	return result
+}
+
+// buildJWKS creates JWKS configuration from secrets
+func (a *Assembler) buildJWKS(secrets *corev1.Secret) []map[string]any {
+	if secrets == nil {
+		return nil
+	}
+
+	privateKey := string(secrets.Data["issuer_private_key"])
+	if privateKey == "" {
+		return nil
+	}
+
+	return []map[string]any{{
+		"algorithm":         "RS256",
+		"use":               "sig",
+		"key":               privateKey,
+		"certificate_chain": string(secrets.Data["issuer_certificate_chain"]),
+	}}
+}
+
+// buildClaimsPolicyEntry builds a claims policy entry from a ClaimsPolicy CRD
+func (a *Assembler) buildClaimsPolicyEntry(policy *securityv1alpha1.ClaimsPolicy) ClaimsPolicyEntry {
+	entry := ClaimsPolicyEntry{
+		IDToken:       nonEmpty(policy.Spec.IDToken),
+		Userinfo:      nonEmpty(policy.Spec.Userinfo),
+		AccessToken:   nonEmpty(policy.Spec.AccessToken),
+		Introspection: nonEmpty(policy.Spec.Introspection),
+	}
+
+	// CustomClaims are empty maps referencing user attributes
+	if len(policy.Spec.CustomClaims) > 0 {
+		entry.CustomClaims = make(map[string]any, len(policy.Spec.CustomClaims))
+		for _, claim := range policy.Spec.CustomClaims {
+			entry.CustomClaims[normalizeToSnakeCase(claim)] = map[string]any{}
+		}
+	}
+
+	return entry
+}
+
 // resolveClientSecret resolves the client secret from secretRef
-// For confidential (non-public) clients, secretRef is required
 func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha1.OIDCClient) (string, error) {
-	// Public clients don't need a secret
 	if oc.Spec.Public {
 		return "", nil
 	}
 
-	// Confidential clients require a secretRef
 	if oc.Spec.SecretRef == nil {
 		return "", operrors.NewConfigError("confidential client requires secretRef", nil).
 			WithContext("clientId", oc.Spec.ClientID).
 			WithContext("hint", "use ExternalSecrets to manage the client secret and reference it via secretRef")
 	}
 
-	// Look up the referenced secret
-	namespace := oc.Spec.SecretRef.Namespace
-	if namespace == "" {
-		namespace = oc.ObjectMeta.Namespace
-	}
+	namespace := cmp.Or(oc.Spec.SecretRef.Namespace, oc.ObjectMeta.Namespace)
 
 	secret := &corev1.Secret{}
-	err := a.Client.Get(ctx, types.NamespacedName{
-		Name:      oc.Spec.SecretRef.Name,
-		Namespace: namespace,
-	}, secret)
-	if err != nil {
+	if err := a.Client.Get(ctx, types.NamespacedName{Name: oc.Spec.SecretRef.Name, Namespace: namespace}, secret); err != nil {
 		return "", operrors.NewTransientError("failed to get secret", err).
 			WithContext("secretName", oc.Spec.SecretRef.Name).
 			WithContext("namespace", namespace)
 	}
 
-	key := oc.Spec.SecretRef.Key
-	if key == "" {
-		key = "client_secret"
-	}
-
+	key := cmp.Or(oc.Spec.SecretRef.Key, "client_secret")
 	secretValue, ok := secret.Data[key]
 	if !ok {
 		return "", operrors.NewConfigError("key not found in secret", nil).
@@ -148,142 +265,90 @@ func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha
 
 // buildClientEntry builds a client entry from an OIDCClient
 func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecret string) ClientEntry {
-	// Apply defaults
-	scopes := oc.Spec.Scopes
-	if len(scopes) == 0 {
-		scopes = []string{"openid", "profile", "email", "groups"}
-	}
-	if len(oc.Spec.ExtraScopes) > 0 {
-		scopes = append(scopes, oc.Spec.ExtraScopes...)
-		scopes = dedupeStrings(scopes)
+	spec := &oc.Spec
+
+	// Merge scopes with extraScopes, deduplicated
+	scopes := orSlice(spec.Scopes, defaultScopes)
+	if len(spec.ExtraScopes) > 0 {
+		scopes = unique(append(slices.Clone(scopes), spec.ExtraScopes...))
 	}
 
-	responseTypes := oc.Spec.ResponseTypes
-	if len(responseTypes) == 0 {
-		responseTypes = []string{"code"}
-	}
-
-	grantTypes := oc.Spec.GrantTypes
-	if len(grantTypes) == 0 {
-		grantTypes = []string{"authorization_code"}
-	}
-
-	responseModes := oc.Spec.ResponseModes
-	if len(responseModes) == 0 {
-		responseModes = []string{"form_post", "query", "fragment"}
-	}
-
-	userinfoAlg := oc.Spec.UserinfoSignedResponseAlg
-	if userinfoAlg == "" {
-		userinfoAlg = "none"
-	}
-
-	tokenAuthMethod := oc.Spec.TokenEndpointAuthMethod
+	// Determine token endpoint auth method based on client type
+	tokenAuthMethod := spec.TokenEndpointAuthMethod
 	if tokenAuthMethod == "" {
-		if oc.Spec.Public {
-			// Public clients should use "none" for token endpoint auth
+		if spec.Public {
 			tokenAuthMethod = "none"
 		} else {
 			tokenAuthMethod = "client_secret_basic"
 		}
 	}
 
-	// Only set PKCE challenge method if PKCE is required
-	pkceChallengeMethod := ""
-	if oc.Spec.RequirePKCE {
-		pkceChallengeMethod = oc.Spec.PKCEChallengeMethod
-		if pkceChallengeMethod == "" {
-			pkceChallengeMethod = "S256"
-		}
-	}
-
-	clientName := oc.Spec.ClientName
-	if clientName == "" {
-		clientName = oc.Spec.ClientID
-	}
-
-	authPolicy := oc.Spec.AuthorizationPolicy
-	if authPolicy == "" {
-		authPolicy = "two_factor"
+	// PKCE challenge method only set if PKCE is required
+	var pkceChallengeMethod string
+	if spec.RequirePKCE {
+		pkceChallengeMethod = cmp.Or(spec.PKCEChallengeMethod, "S256")
 	}
 
 	entry := ClientEntry{
-		ClientID:                  oc.Spec.ClientID,
-		ClientName:                clientName,
-		Public:                    oc.Spec.Public,
-		AuthorizationPolicy:       authPolicy,
-		RedirectURIs:              oc.Spec.RedirectURIs,
+		ClientID:                  spec.ClientID,
+		ClientName:                cmp.Or(spec.ClientName, spec.ClientID),
+		Public:                    spec.Public,
+		AuthorizationPolicy:       cmp.Or(spec.AuthorizationPolicy, "two_factor"),
+		RedirectURIs:              spec.RedirectURIs,
 		Scopes:                    scopes,
-		ResponseTypes:             responseTypes,
-		GrantTypes:                grantTypes,
-		ResponseModes:             responseModes,
-		UserinfoSignedResponseAlg: userinfoAlg,
+		ResponseTypes:             orSlice(spec.ResponseTypes, defaultResponseTypes),
+		GrantTypes:                orSlice(spec.GrantTypes, defaultGrantTypes),
+		ResponseModes:             orSlice(spec.ResponseModes, defaultResponseModes),
+		UserinfoSignedResponseAlg: cmp.Or(spec.UserinfoSignedResponseAlg, "none"),
 		TokenEndpointAuthMethod:   tokenAuthMethod,
-		RequirePKCE:               oc.Spec.RequirePKCE,
+		RequirePKCE:               spec.RequirePKCE,
 		PKCEChallengeMethod:       pkceChallengeMethod,
+		// Optional fields
+		ConsentMode:                  spec.ConsentMode,
+		ClaimsPolicy:                 spec.ClaimsPolicy,
+		SectorIdentifierURI:          spec.SectorIdentifierURI,
+		Audience:                     spec.Audience,
+		AccessTokenSignedResponseAlg: spec.AccessTokenSignedResponseAlg,
 	}
 
-	// Set optional fields only if specified
-	if oc.Spec.ConsentMode != "" {
-		entry.ConsentMode = oc.Spec.ConsentMode
+	if spec.PreconfiguredConsentDuration != nil {
+		entry.PreconfiguredConsentDuration = spec.PreconfiguredConsentDuration.Duration.String()
 	}
 
-	if oc.Spec.ClaimsPolicy != "" {
-		entry.ClaimsPolicy = oc.Spec.ClaimsPolicy
-	}
-
-	if oc.Spec.SectorIdentifierURI != "" {
-		entry.SectorIdentifierURI = oc.Spec.SectorIdentifierURI
-	}
-
-	if len(oc.Spec.Audience) > 0 {
-		entry.Audience = oc.Spec.Audience
-	}
-
-	if oc.Spec.PreconfiguredConsentDuration != nil {
-		entry.PreconfiguredConsentDuration = oc.Spec.PreconfiguredConsentDuration.Duration.String()
-	}
-
-	if oc.Spec.AccessTokenSignedResponseAlg != "" {
-		entry.AccessTokenSignedResponseAlg = oc.Spec.AccessTokenSignedResponseAlg
-	}
-
-	// Only set client secret for non-public clients
-	if !oc.Spec.Public && clientSecret != "" {
-		entry.ClientSecret = hashSecretPBKDF2(clientSecret, oc.Spec.ClientID)
+	if !spec.Public && clientSecret != "" {
+		entry.ClientSecret = hashSecretPBKDF2(clientSecret, spec.ClientID)
 	}
 
 	return entry
 }
 
 // buildConfigYAML builds the Authelia OIDC configuration YAML
-func (a *Assembler) buildConfigYAML(clients []ClientEntry, oidcSecrets *corev1.Secret) (string, error) {
-	oidcConfig := map[string]interface{}{
-		"clients": clients,
+func (a *Assembler) buildConfigYAML(result *AssemblyResult) (string, error) {
+	oidcConfig := map[string]any{
+		"clients": result.Clients,
 	}
 
-	// Add JWKS configuration if secrets are available
-	if oidcSecrets != nil {
-		privateKey := string(oidcSecrets.Data["issuer_private_key"])
-		certChain := string(oidcSecrets.Data["issuer_certificate_chain"])
-
-		if privateKey != "" {
-			jwks := []map[string]interface{}{
-				{
-					"algorithm":         "RS256",
-					"use":               "sig",
-					"key":               privateKey,
-					"certificate_chain": certChain,
-				},
-			}
-			oidcConfig["jwks"] = jwks
-		}
+	// Only add non-empty maps
+	if len(result.ClaimsPolicies) > 0 {
+		oidcConfig["claims_policies"] = result.ClaimsPolicies
+	}
+	if len(result.Scopes) > 0 {
+		oidcConfig["scopes"] = result.Scopes
+	}
+	if len(result.JWKS) > 0 {
+		oidcConfig["jwks"] = result.JWKS
 	}
 
-	config := map[string]interface{}{
-		"identity_providers": map[string]interface{}{
+	config := map[string]any{
+		"identity_providers": map[string]any{
 			"oidc": oidcConfig,
 		},
+	}
+
+	if len(result.UserAttributes) > 0 {
+		config["definitions"] = map[string]any{
+			"user_attributes": result.UserAttributes,
+		}
 	}
 
 	yamlBytes, err := yaml.Marshal(config)
@@ -298,34 +363,49 @@ func (a *Assembler) buildConfigYAML(clients []ClientEntry, oidcSecrets *corev1.S
 var phcB64Encoding = base64.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./").WithPadding(base64.NoPadding)
 
 // hashSecretPBKDF2 hashes a secret using PBKDF2-SHA512 in Authelia's expected format
-// Format: $pbkdf2-sha512$<iterations>$<salt-b64>$<hash-b64>
-// The salt is derived deterministically from the clientId to ensure consistent hashes
-// across reconciliations without needing to store salt state.
-func hashSecretPBKDF2(secret string, clientId string) string {
-	iterations := 310000
+func hashSecretPBKDF2(secret, clientID string) string {
+	const iterations = 310000
 
-	// Derive salt deterministically from clientId using SHA256
-	// This ensures the same clientId always produces the same salt
-	saltHash := sha512.Sum512([]byte("authelia-oidc-salt:" + clientId))
-	saltBytes := saltHash[:16] // Use first 16 bytes as salt
+	// Derive salt deterministically from clientId
+	saltHash := sha512.Sum512([]byte("authelia-oidc-salt:" + clientID))
+	saltBytes := saltHash[:16]
 
 	hash := pbkdf2.Key([]byte(secret), saltBytes, iterations, 64, sha512.New)
 
-	saltB64 := phcB64Encoding.EncodeToString(saltBytes)
-	hashB64 := phcB64Encoding.EncodeToString(hash)
-
-	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", iterations, saltB64, hashB64)
+	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s",
+		iterations,
+		phcB64Encoding.EncodeToString(saltBytes),
+		phcB64Encoding.EncodeToString(hash),
+	)
 }
 
-func dedupeStrings(items []string) []string {
-	seen := make(map[string]struct{}, len(items))
-	result := make([]string, 0, len(items))
+// unique returns a deduplicated slice preserving order
+func unique[T comparable](items []T) []T {
+	seen := make(map[T]struct{}, len(items))
+	result := make([]T, 0, len(items))
 	for _, item := range items {
-		if _, ok := seen[item]; ok {
-			continue
+		if _, ok := seen[item]; !ok {
+			seen[item] = struct{}{}
+			result = append(result, item)
 		}
-		seen[item] = struct{}{}
-		result = append(result, item)
 	}
 	return result
+}
+
+// nonEmpty returns nil if the slice is empty, otherwise returns the slice
+func nonEmpty[T any](s []T) []T {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
+}
+
+// orSlice returns the first non-empty slice, similar to cmp.Or but for slices
+func orSlice[T any](slices ...[]T) []T {
+	for _, s := range slices {
+		if len(s) > 0 {
+			return s
+		}
+	}
+	return nil
 }

@@ -1,14 +1,17 @@
 # Authelia OIDC Operator
 
-A Kubernetes operator that manages OIDC client configurations for Authelia. It watches `OIDCClient` custom resources and automatically assembles the Authelia configuration.
+A Kubernetes operator that manages OIDC client configurations for Authelia. It watches `OIDCClient`, `ClaimsPolicy`, and `UserAttribute` custom resources and automatically assembles the Authelia configuration.
 
 ## Features
 
 - **Declarative OIDC Client Management**: Define OIDC clients as Kubernetes resources
-- **Automatic Configuration Assembly**: Aggregates all OIDCClient resources into Authelia's configuration
+- **Claims Policies**: Define which claims to include in tokens via `ClaimsPolicy` CRDs
+- **User Attributes**: Define custom user attributes with CEL expressions via `UserAttribute` CRDs
+- **Automatic Configuration Assembly**: Aggregates all resources into Authelia's configuration with deep merge
 - **ExternalSecrets Integration**: Works seamlessly with ExternalSecrets/Vault for secret management
 - **Instant Updates**: Reacts immediately to changes (no polling delays)
 - **Secure**: Hashes client secrets using PBKDF2-SHA512 with deterministic salts
+- **Namespace-Scoped References**: ClaimsPolicy and UserAttribute must be in the same namespace as the OIDCClient
 
 ## Installation
 
@@ -19,10 +22,10 @@ A Kubernetes operator that manages OIDC client configurations for Authelia. It w
 - ExternalSecrets operator (recommended for secret management)
 - The OIDCClient CRD installed
 
-### Install the CRD
+### Install the CRDs
 
 ```bash
-kubectl apply -f config/crd/bases/security.homelab.io_oidcclients.yaml
+kubectl apply -f config/crd/bases/
 ```
 
 ### Deploy the Operator
@@ -68,6 +71,74 @@ spec:
   redirectUris:
     - https://spa.example.com/callback
   requirePkce: true
+```
+
+### ClaimsPolicy Example
+
+Define which claims to include in tokens:
+
+```yaml
+apiVersion: security.homelab.io/v1alpha1
+kind: ClaimsPolicy
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  # policyName defaults to 'grafana' (metadata.name)
+  idToken:
+    - email
+    - name
+    - groups
+    - preferred_username
+```
+
+### UserAttribute with ClaimsPolicy Example
+
+Define custom user attributes and use them in claims policies:
+
+```yaml
+# First, define the user attribute
+apiVersion: security.homelab.io/v1alpha1
+kind: UserAttribute
+metadata:
+  name: is-nextcloud-admin
+  namespace: nextcloud
+spec:
+  attributeName: is_nextcloud_admin  # Explicit Authelia name (snake_case)
+  expression: '"lldap_admin" in groups'
+---
+# Then, reference it in a ClaimsPolicy
+apiVersion: security.homelab.io/v1alpha1
+kind: ClaimsPolicy
+metadata:
+  name: nextcloud-userinfo
+  namespace: nextcloud
+spec:
+  policyName: nextcloud_userinfo
+  customClaims:
+    - is_nextcloud_admin  # Must exist as UserAttribute in same namespace
+  customScope:
+    scopeName: nextcloud_userinfo
+    claims:
+      - is_nextcloud_admin
+---
+# OIDCClient referencing the claims policy
+apiVersion: security.homelab.io/v1alpha1
+kind: OIDCClient
+metadata:
+  name: nextcloud
+  namespace: nextcloud
+spec:
+  clientId: nextcloud
+  clientName: Nextcloud
+  secretRef:
+    name: oidc-nextcloud-client
+    key: client_secret
+  redirectUris:
+    - https://drive.example.com/apps/oidc_login/oidc
+  extraScopes:
+    - nextcloud_userinfo
+  claimsPolicy: nextcloud_userinfo  # Must exist as ClaimsPolicy in same namespace
 ```
 
 ### Full Example with ExternalSecrets
@@ -138,13 +209,25 @@ The operator accepts the following flags:
 
 ## How It Works
 
-1. **Watch**: The operator watches all `OIDCClient` resources cluster-wide
-2. **Collect**: When any OIDCClient changes, it collects all OIDCClients
-3. **Resolve Secrets**: For each confidential client, fetches the secret from `secretRef`
-4. **Hash**: Hashes secrets using PBKDF2-SHA512 with a deterministic salt derived from the clientId
-5. **Assemble**: Builds the complete OIDC configuration
-6. **Update**: Merges the OIDC config into the Authelia ConfigMap (only if changed)
-7. **Reload**: Reloader (or similar) restarts Authelia to pick up changes
+1. **Watch**: The operator watches `OIDCClient`, `ClaimsPolicy`, `UserAttribute` resources cluster-wide, plus the base ConfigMap
+2. **Collect**: When any resource changes, it collects all resources
+3. **Validate**: Validates references (ClaimsPolicy→UserAttribute, OIDCClient→ClaimsPolicy) are in the same namespace
+4. **Resolve Secrets**: For each confidential client, fetches the secret from `secretRef`
+5. **Hash**: Hashes secrets using PBKDF2-SHA512 with a deterministic salt derived from the clientId
+6. **Assemble**: Builds the complete OIDC configuration
+7. **Deep Merge**: Merges assembled config into the base ConfigMap, preserving non-managed fields
+8. **Update**: Updates the Authelia ConfigMap (only if changed)
+9. **Reload**: Reloader (or similar) restarts Authelia to pick up changes
+
+### Deep Merge Strategy
+
+The operator performs a deep merge at the `identity_providers.oidc` level:
+- Preserves all base config fields (`cors`, `lifespans`, `enforce_pkce`, etc.)
+- Merges `clients` (base + CRD-managed)
+- Merges `claims_policies` from ClaimsPolicy CRDs
+- Merges `scopes` from ClaimsPolicy CRDs with customScope
+- Merges `definitions.user_attributes` from UserAttribute CRDs
+- Adds JWKS if secrets are available
 
 ## Development
 

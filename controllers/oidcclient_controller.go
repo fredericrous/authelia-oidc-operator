@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/TwiN/deepmerge"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -54,6 +55,30 @@ func (r *OIDCClientReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&securityv1alpha1.OIDCClient{}).
 		Owns(&corev1.Secret{}).
+		// Watch ClaimsPolicy resources
+		Watches(
+			&securityv1alpha1.ClaimsPolicy{},
+			r.enqueueAllOIDCClients(),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		// Watch UserAttribute resources
+		Watches(
+			&securityv1alpha1.UserAttribute{},
+			r.enqueueAllOIDCClients(),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		// Watch base ConfigMap
+		Watches(
+			&corev1.ConfigMap{},
+			r.enqueueForBaseConfigMap(),
+			builder.WithPredicates(
+				predicate.NewPredicateFuncs(func(obj client.Object) bool {
+					return obj.GetName() == r.Config.AutheliaConfigMapBaseName &&
+						obj.GetNamespace() == r.Config.AutheliaNamespace
+				}),
+			),
+		).
+		// Watch Secrets for client secrets and JWKS
 		Watches(
 			&corev1.Secret{},
 			r.enqueueRequestsForSecret(),
@@ -68,6 +93,8 @@ func (r *OIDCClientReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // Reconcile handles the reconciliation loop
 // +kubebuilder:rbac:groups=security.homelab.io,resources=oidcclients,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=security.homelab.io,resources=oidcclients/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=security.homelab.io,resources=claimspolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=security.homelab.io,resources=userattributes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -85,8 +112,20 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, operrors.NewTransientError("failed to list OIDCClients", err)
 	}
 
-	if len(oidcClientList.Items) == 0 {
-		log.Info("No OIDCClients found, skipping reconciliation")
+	// Fetch all ClaimsPolicies cluster-wide
+	claimsPolicyList := &securityv1alpha1.ClaimsPolicyList{}
+	if err := r.List(ctx, claimsPolicyList); err != nil {
+		return ctrl.Result{}, operrors.NewTransientError("failed to list ClaimsPolicies", err)
+	}
+
+	// Fetch all UserAttributes cluster-wide
+	userAttributeList := &securityv1alpha1.UserAttributeList{}
+	if err := r.List(ctx, userAttributeList); err != nil {
+		return ctrl.Result{}, operrors.NewTransientError("failed to list UserAttributes", err)
+	}
+
+	if len(oidcClientList.Items) == 0 && len(claimsPolicyList.Items) == 0 && len(userAttributeList.Items) == 0 {
+		log.Info("No OIDC resources found, skipping reconciliation")
 		return ctrl.Result{}, nil
 	}
 
@@ -105,18 +144,28 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Assemble the configuration
-	result, err := r.Assembler.Assemble(ctx, oidcClientList.Items, oidcSecrets)
+	result, err := r.Assembler.Assemble(
+		ctx,
+		oidcClientList.Items,
+		claimsPolicyList.Items,
+		userAttributeList.Items,
+		oidcSecrets,
+	)
 	if err != nil {
-		r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeWarning, "AssemblyFailed", err.Error())
+		if len(oidcClientList.Items) > 0 {
+			r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeWarning, "AssemblyFailed", err.Error())
+		}
 		if operrors.ShouldRetry(err) {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	// Update the Authelia ConfigMap
+	// Update the Authelia ConfigMap with deep merge
 	if err := r.updateAutheliaConfig(ctx, result); err != nil {
-		r.Recorder.Eventf(&oidcClientList.Items[0], corev1.EventTypeWarning, "ConfigUpdateFailed", "Failed to update Authelia config: %v", err)
+		if len(oidcClientList.Items) > 0 {
+			r.Recorder.Eventf(&oidcClientList.Items[0], corev1.EventTypeWarning, "ConfigUpdateFailed", "Failed to update Authelia config: %v", err)
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -131,13 +180,22 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	log.Info("Reconciliation completed successfully", "clientCount", len(oidcClientList.Items))
-	r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeNormal, "Synced", fmt.Sprintf("Successfully assembled %d OIDC clients", len(oidcClientList.Items)))
+	log.Info("Reconciliation completed successfully",
+		"clientCount", len(oidcClientList.Items),
+		"policyCount", len(claimsPolicyList.Items),
+		"attributeCount", len(userAttributeList.Items))
+
+	if len(oidcClientList.Items) > 0 {
+		r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeNormal, "Synced",
+			fmt.Sprintf("Successfully assembled %d clients, %d policies, %d attributes",
+				len(oidcClientList.Items), len(claimsPolicyList.Items), len(userAttributeList.Items)))
+	}
 
 	return ctrl.Result{}, nil
 }
 
-// updateAutheliaConfig updates the Authelia ConfigMap with the assembled configuration
+// updateAutheliaConfig updates the Authelia ConfigMap with deep-merged configuration
+// Uses TwiN/deepmerge for identity_providers.oidc and definitions.user_attributes
 func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result *assembler.AssemblyResult) error {
 	log := logr.FromContextOrDiscard(ctx)
 
@@ -152,48 +210,26 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 			WithContext("name", r.Config.AutheliaConfigMapBaseName)
 	}
 
-	// Parse the existing configuration
-	configYAML, ok := baseCM.Data["configuration.yml"]
+	// Get the base configuration YAML
+	baseYAML, ok := baseCM.Data["configuration.yml"]
 	if !ok {
 		return operrors.NewConfigError("configuration.yml not found in base ConfigMap", nil)
 	}
 
-	var existingConfig map[string]interface{}
-	if err := yaml.Unmarshal([]byte(configYAML), &existingConfig); err != nil {
-		return operrors.NewConfigError("failed to parse configuration.yml", err)
-	}
-
-	// Parse the assembled OIDC config
-	var oidcConfig map[string]interface{}
-	if err := yaml.Unmarshal([]byte(result.ConfigYAML), &oidcConfig); err != nil {
-		return operrors.NewPermanentError("failed to parse assembled config", err)
-	}
-
-	// Merge the OIDC configuration into the existing config
-	if identityProviders, ok := oidcConfig["identity_providers"].(map[string]interface{}); ok {
-		if existingConfig["identity_providers"] == nil {
-			existingConfig["identity_providers"] = make(map[string]interface{})
-		}
-		// Safe type assertion to avoid panic
-		existingIP, ok := existingConfig["identity_providers"].(map[string]interface{})
-		if !ok {
-			// If identity_providers exists but is not a map, replace it entirely
-			existingConfig["identity_providers"] = make(map[string]interface{})
-			existingIP = existingConfig["identity_providers"].(map[string]interface{})
-		}
-		for k, v := range identityProviders {
-			existingIP[k] = v
-		}
-	}
-
-	// Marshal back to YAML
-	mergedYAML, err := yaml.Marshal(existingConfig)
+	// Deep merge using TwiN/deepmerge
+	// The assembled YAML (result.ConfigYAML) is merged INTO the base config
+	mergedYAML, err := deepmerge.YAML([]byte(baseYAML), []byte(result.ConfigYAML))
 	if err != nil {
-		return operrors.NewPermanentError("failed to marshal merged config", err)
+		return operrors.NewPermanentError("failed to deep merge configs", err)
+	}
+
+	// Post-process: merge clients by client_id (deepmerge replaces slices, we want to merge by ID)
+	mergedYAML, err = r.mergeClientsByID([]byte(baseYAML), mergedYAML)
+	if err != nil {
+		return operrors.NewPermanentError("failed to merge clients", err)
 	}
 
 	// Compute hash of the final merged YAML to detect any changes
-	// This is more reliable than hashing inputs separately as YAML marshal order is deterministic
 	combinedHash := computeHash(string(mergedYAML))
 
 	existing := &corev1.ConfigMap{}
@@ -222,7 +258,7 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		return err
 	}
 
-	// Check if the OIDC config hash has changed
+	// Check if the config hash has changed
 	existingHash := ""
 	if existing.Annotations != nil {
 		existingHash = existing.Annotations["authelia.homelab.io/oidc-config-hash"]
@@ -249,10 +285,129 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 	return r.Update(ctx, existing)
 }
 
+// mergeClientsByID ensures base clients not managed by CRDs are preserved
+// deepmerge replaces slices, but we want to merge clients by client_id
+func (r *OIDCClientReconciler) mergeClientsByID(baseYAML, mergedYAML []byte) ([]byte, error) {
+	var baseConfig, mergedConfig map[string]any
+	if err := yaml.Unmarshal(baseYAML, &baseConfig); err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(mergedYAML, &mergedConfig); err != nil {
+		return nil, err
+	}
+
+	baseClients := getClients(baseConfig)
+	mergedClients := getClients(mergedConfig)
+
+	// Build set of merged client IDs
+	mergedClientIDs := make(map[string]struct{}, len(mergedClients))
+	for _, c := range mergedClients {
+		if id := getClientID(c); id != "" {
+			mergedClientIDs[id] = struct{}{}
+		}
+	}
+
+	// Append base clients not present in merged
+	for _, c := range baseClients {
+		if id := getClientID(c); id != "" {
+			if _, exists := mergedClientIDs[id]; !exists {
+				mergedClients = append(mergedClients, c)
+			}
+		}
+	}
+
+	setClients(mergedConfig, mergedClients)
+	return yaml.Marshal(mergedConfig)
+}
+
+// getClientID extracts client_id from a client map
+func getClientID(c any) string {
+	if client, ok := c.(map[string]any); ok {
+		if id, ok := client["client_id"].(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
+// getClients extracts clients from identity_providers.oidc.clients using nested map access
+func getClients(config map[string]any) []any {
+	return getNestedSlice(config, "identity_providers", "oidc", "clients")
+}
+
+// setClients sets clients in identity_providers.oidc.clients, creating intermediate maps as needed
+func setClients(config map[string]any, clients []any) {
+	ip := getOrCreateNestedMap(config, "identity_providers")
+	oidc := getOrCreateNestedMap(ip, "oidc")
+	oidc["clients"] = clients
+}
+
+// getNestedSlice navigates a nested map structure and returns a slice at the final key
+func getNestedSlice(m map[string]any, keys ...string) []any {
+	for i, key := range keys {
+		if i == len(keys)-1 {
+			if slice, ok := m[key].([]any); ok {
+				return slice
+			}
+			return nil
+		}
+		if next, ok := m[key].(map[string]any); ok {
+			m = next
+		} else {
+			return nil
+		}
+	}
+	return nil
+}
+
+// getOrCreateNestedMap gets or creates a nested map at the given key
+func getOrCreateNestedMap(parent map[string]any, key string) map[string]any {
+	if m, ok := parent[key].(map[string]any); ok {
+		return m
+	}
+	m := make(map[string]any)
+	parent[key] = m
+	return m
+}
+
 // computeHash computes a SHA256 hash of the given string
 func computeHash(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+// enqueueAllOIDCClients returns a handler that enqueues any OIDCClient to trigger reconciliation
+func (r *OIDCClientReconciler) enqueueAllOIDCClients() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		// List all OIDCClients and enqueue one to trigger reconciliation
+		oidcClientList := &securityv1alpha1.OIDCClientList{}
+		if err := r.List(ctx, oidcClientList); err != nil {
+			r.Log.Error(err, "Failed to list OIDCClients")
+			return nil
+		}
+
+		if len(oidcClientList.Items) == 0 {
+			return nil
+		}
+
+		// Enqueue the first OIDCClient to trigger reconciliation
+		oc := oidcClientList.Items[0]
+		r.Log.V(1).Info("Enqueuing OIDCClient due to related resource change",
+			"trigger", fmt.Sprintf("%s/%s", obj.GetNamespace(), obj.GetName()),
+			"triggerKind", obj.GetObjectKind().GroupVersionKind().Kind)
+
+		return []reconcile.Request{{
+			NamespacedName: types.NamespacedName{
+				Name:      oc.Name,
+				Namespace: oc.Namespace,
+			},
+		}}
+	})
+}
+
+// enqueueForBaseConfigMap returns a handler for base ConfigMap changes
+func (r *OIDCClientReconciler) enqueueForBaseConfigMap() handler.EventHandler {
+	return r.enqueueAllOIDCClients()
 }
 
 // enqueueRequestsForSecret returns a handler that enqueues OIDCClient objects

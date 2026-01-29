@@ -1,0 +1,13 @@
+apiVersion: security.homelab.io/v1alpha1
+kind: ClaimsPolicy
+metadata:
+  name: nextcloud-userinfo
+  namespace: nextcloud
+spec:
+  policyName: nextcloud_userinfo  # Explicit snake_case name for Authelia
+  customClaims:
+    - is_nextcloud_admin  # References UserAttribute in same namespace
+  customScope:
+    scopeName: nextcloud_userinfo
+    claims:
+      - is_nextcloud_admin

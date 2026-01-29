@@ -1,0 +1,8 @@
+apiVersion: security.homelab.io/v1alpha1
+kind: UserAttribute
+metadata:
+  name: is-admin
+  namespace: default
+spec:
+  # attributeName defaults to is_admin (metadata.name with hyphens → underscores)
+  expression: '"admin" in groups'

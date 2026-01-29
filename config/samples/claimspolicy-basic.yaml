@@ -1,0 +1,12 @@
+apiVersion: security.homelab.io/v1alpha1
+kind: ClaimsPolicy
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  # policyName defaults to grafana (metadata.name)
+  idToken:
+    - email
+    - name
+    - groups
+    - preferred_username

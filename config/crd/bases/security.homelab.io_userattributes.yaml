@@ -1,0 +1,88 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: userattributes.security.homelab.io
+spec:
+  group: security.homelab.io
+  names:
+    kind: UserAttribute
+    listKind: UserAttributeList
+    plural: userattributes
+    shortNames:
+    - uattr
+    singular: userattribute
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.resolvedName
+      name: Attribute
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: UserAttribute is the Schema for the userattributes API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: UserAttributeSpec defines a user attribute for Authelia
+            properties:
+              attributeName:
+                description: |-
+                  AttributeName is the name in Authelia config (snake_case)
+                  If not specified, derived from metadata.name (hyphens → underscores)
+                type: string
+              expression:
+                description: |-
+                  Expression is a CEL expression evaluated for each user
+                  Context available: groups ([]string), username, email, display_name
+                  Example: '"admin" in groups'
+                minLength: 1
+                type: string
+            required:
+            - expression
+            type: object
+          status:
+            description: UserAttributeStatus defines the observed state
+            properties:
+              lastSyncedAt:
+                description: LastSyncedAt is the timestamp of the last successful
+                  sync
+                format: date-time
+                type: string
+              ready:
+                description: Ready indicates if the attribute is valid and synced
+                type: boolean
+              resolvedName:
+                description: ResolvedName is the final Authelia attribute name
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

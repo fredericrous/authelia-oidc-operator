@@ -36,6 +36,15 @@ rules:
 - apiGroups:
   - security.homelab.io
   resources:
+  - claimspolicies
+  - userattributes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - security.homelab.io
+  resources:
   - oidcclients
   verbs:
   - create
