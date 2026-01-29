@@ -18,12 +18,16 @@ spec:
     - profile
     - email
     - groups
+  extraScopes:
+    - nextcloud_userinfo
   # Audience restriction
   audience:
     - internal-api
     - reporting-api
   # Authorization settings
   authorizationPolicy: two_factor
+  # Claims policy for custom userinfo scopes
+  claimsPolicy: nextcloud_userinfo
   # Pre-configured consent for trusted internal services
   consentMode: pre-configured
   preconfiguredConsentDuration: "720h"  # 30 days
@@ -31,3 +35,5 @@ spec:
   sectorIdentifierUri: https://internal.example.com
   # Token endpoint settings
   tokenEndpointAuthMethod: client_secret_basic
+  # Access token signing (optional)
+  accessTokenSignedResponseAlg: none

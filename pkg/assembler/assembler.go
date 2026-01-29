@@ -39,6 +39,7 @@ type ClientEntry struct {
 	ClientSecret                 string   `json:"client_secret,omitempty"`
 	Public                       bool     `json:"public,omitempty"`
 	AuthorizationPolicy          string   `json:"authorization_policy,omitempty"`
+	ClaimsPolicy                 string   `json:"claims_policy,omitempty"`
 	ConsentMode                  string   `json:"consent_mode,omitempty"`
 	PreconfiguredConsentDuration string   `json:"pre_configured_consent_duration,omitempty"`
 	Audience                     []string `json:"audience,omitempty"`
@@ -49,6 +50,7 @@ type ClientEntry struct {
 	GrantTypes                   []string `json:"grant_types"`
 	ResponseModes                []string `json:"response_modes"`
 	UserinfoSignedResponseAlg    string   `json:"userinfo_signed_response_alg"`
+	AccessTokenSignedResponseAlg string   `json:"access_token_signed_response_alg,omitempty"`
 	TokenEndpointAuthMethod      string   `json:"token_endpoint_auth_method"`
 	RequirePKCE                  bool     `json:"require_pkce,omitempty"`
 	PKCEChallengeMethod          string   `json:"pkce_challenge_method,omitempty"`
@@ -151,6 +153,10 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 	if len(scopes) == 0 {
 		scopes = []string{"openid", "profile", "email", "groups"}
 	}
+	if len(oc.Spec.ExtraScopes) > 0 {
+		scopes = append(scopes, oc.Spec.ExtraScopes...)
+		scopes = dedupeStrings(scopes)
+	}
 
 	responseTypes := oc.Spec.ResponseTypes
 	if len(responseTypes) == 0 {
@@ -222,6 +228,10 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 		entry.ConsentMode = oc.Spec.ConsentMode
 	}
 
+	if oc.Spec.ClaimsPolicy != "" {
+		entry.ClaimsPolicy = oc.Spec.ClaimsPolicy
+	}
+
 	if oc.Spec.SectorIdentifierURI != "" {
 		entry.SectorIdentifierURI = oc.Spec.SectorIdentifierURI
 	}
@@ -232,6 +242,10 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 
 	if oc.Spec.PreconfiguredConsentDuration != nil {
 		entry.PreconfiguredConsentDuration = oc.Spec.PreconfiguredConsentDuration.Duration.String()
+	}
+
+	if oc.Spec.AccessTokenSignedResponseAlg != "" {
+		entry.AccessTokenSignedResponseAlg = oc.Spec.AccessTokenSignedResponseAlg
 	}
 
 	// Only set client secret for non-public clients
@@ -301,4 +315,17 @@ func hashSecretPBKDF2(secret string, clientId string) string {
 	hashB64 := phcB64Encoding.EncodeToString(hash)
 
 	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", iterations, saltB64, hashB64)
+}
+
+func dedupeStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
 }

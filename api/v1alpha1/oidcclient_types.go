@@ -29,6 +29,10 @@ type OIDCClientSpec struct {
 	// +kubebuilder:default={"openid","profile","email","groups"}
 	Scopes []string `json:"scopes,omitempty"`
 
+	// ExtraScopes are appended to the default or explicitly provided scopes
+	// +optional
+	ExtraScopes []string `json:"extraScopes,omitempty"`
+
 	// Audience is the list of allowed audiences for this client
 	// +optional
 	Audience []string `json:"audience,omitempty"`
@@ -53,6 +57,10 @@ type OIDCClientSpec struct {
 	// +kubebuilder:default="none"
 	UserinfoSignedResponseAlg string `json:"userinfoSignedResponseAlg,omitempty"`
 
+	// AccessTokenSignedResponseAlg is the algorithm for signing access tokens
+	// +optional
+	AccessTokenSignedResponseAlg string `json:"accessTokenSignedResponseAlg,omitempty"`
+
 	// TokenEndpointAuthMethod is the authentication method for the token endpoint
 	// +optional
 	// +kubebuilder:default="client_secret_basic"
@@ -68,6 +76,10 @@ type OIDCClientSpec struct {
 	// +optional
 	// +kubebuilder:validation:Enum=one_factor;two_factor
 	AuthorizationPolicy string `json:"authorizationPolicy,omitempty"`
+
+	// ClaimsPolicy is the claims policy for the client
+	// +optional
+	ClaimsPolicy string `json:"claimsPolicy,omitempty"`
 
 	// SectorIdentifierURI for pairwise subject identifier
 	// +optional

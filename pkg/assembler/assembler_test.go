@@ -18,13 +18,15 @@ func TestBuildClientEntry(t *testing.T) {
 	a := &Assembler{Log: logr.Discard()}
 
 	tests := []struct {
-		name         string
-		oidcClient   *securityv1alpha1.OIDCClient
-		clientSecret string
-		wantID       string
-		wantName     string
-		wantPublic   bool
-		wantScopes   []string
+		name          string
+		oidcClient    *securityv1alpha1.OIDCClient
+		clientSecret  string
+		wantID        string
+		wantName      string
+		wantPublic    bool
+		wantScopes    []string
+		wantClaims    string
+		wantAccessAlg string
 	}{
 		{
 			name: "basic client with defaults",
@@ -34,11 +36,13 @@ func TestBuildClientEntry(t *testing.T) {
 					RedirectURIs: []string{"https://example.com/callback"},
 				},
 			},
-			clientSecret: "secret123",
-			wantID:       "test-client",
-			wantName:     "test-client", // defaults to clientID
-			wantPublic:   false,
-			wantScopes:   []string{"openid", "profile", "email", "groups"},
+			clientSecret:  "secret123",
+			wantID:        "test-client",
+			wantName:      "test-client", // defaults to clientID
+			wantPublic:    false,
+			wantScopes:    []string{"openid", "profile", "email", "groups"},
+			wantClaims:    "",
+			wantAccessAlg: "",
 		},
 		{
 			name: "client with custom name and scopes",
@@ -50,11 +54,13 @@ func TestBuildClientEntry(t *testing.T) {
 					Scopes:       []string{"openid", "profile"},
 				},
 			},
-			clientSecret: "secret456",
-			wantID:       "custom-client",
-			wantName:     "My Custom Client",
-			wantPublic:   false,
-			wantScopes:   []string{"openid", "profile"},
+			clientSecret:  "secret456",
+			wantID:        "custom-client",
+			wantName:      "My Custom Client",
+			wantPublic:    false,
+			wantScopes:    []string{"openid", "profile"},
+			wantClaims:    "",
+			wantAccessAlg: "",
 		},
 		{
 			name: "public client",
@@ -66,11 +72,32 @@ func TestBuildClientEntry(t *testing.T) {
 					RedirectURIs: []string{"https://spa.example.com/callback"},
 				},
 			},
-			clientSecret: "",
-			wantID:       "public-spa",
-			wantName:     "Public SPA",
-			wantPublic:   true,
-			wantScopes:   []string{"openid", "profile", "email", "groups"},
+			clientSecret:  "",
+			wantID:        "public-spa",
+			wantName:      "Public SPA",
+			wantPublic:    true,
+			wantScopes:    []string{"openid", "profile", "email", "groups"},
+			wantClaims:    "",
+			wantAccessAlg: "",
+		},
+		{
+			name: "client with extra scopes and claims policy",
+			oidcClient: &securityv1alpha1.OIDCClient{
+				Spec: securityv1alpha1.OIDCClientSpec{
+					ClientID:                     "nextcloud",
+					RedirectURIs:                 []string{"https://nextcloud.example.com/oidc"},
+					ExtraScopes:                  []string{"nextcloud_userinfo"},
+					ClaimsPolicy:                 "nextcloud_userinfo",
+					AccessTokenSignedResponseAlg: "none",
+				},
+			},
+			clientSecret:  "secret789",
+			wantID:        "nextcloud",
+			wantName:      "nextcloud",
+			wantPublic:    false,
+			wantScopes:    []string{"openid", "profile", "email", "groups", "nextcloud_userinfo"},
+			wantClaims:    "nextcloud_userinfo",
+			wantAccessAlg: "none",
 		},
 	}
 
@@ -89,6 +116,12 @@ func TestBuildClientEntry(t *testing.T) {
 			}
 			if len(entry.Scopes) != len(tt.wantScopes) {
 				t.Errorf("Scopes = %v, want %v", entry.Scopes, tt.wantScopes)
+			}
+			if entry.ClaimsPolicy != tt.wantClaims {
+				t.Errorf("ClaimsPolicy = %v, want %v", entry.ClaimsPolicy, tt.wantClaims)
+			}
+			if entry.AccessTokenSignedResponseAlg != tt.wantAccessAlg {
+				t.Errorf("AccessTokenSignedResponseAlg = %v, want %v", entry.AccessTokenSignedResponseAlg, tt.wantAccessAlg)
 			}
 		})
 	}

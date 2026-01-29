@@ -51,6 +51,10 @@ spec:
           spec:
             description: OIDCClientSpec defines the desired state of OIDCClient
             properties:
+              accessTokenSignedResponseAlg:
+                description: AccessTokenSignedResponseAlg is the algorithm for signing
+                  access tokens
+                type: string
               audience:
                 description: Audience is the list of allowed audiences for this client
                 items:
@@ -61,6 +65,9 @@ spec:
                 enum:
                 - one_factor
                 - two_factor
+                type: string
+              claimsPolicy:
+                description: ClaimsPolicy is the claims policy for the client
                 type: string
               clientId:
                 description: ClientID is the unique identifier for the OIDC client
@@ -76,6 +83,12 @@ spec:
                 - implicit
                 - pre-configured
                 type: string
+              extraScopes:
+                description: ExtraScopes are appended to the default or explicitly
+                  provided scopes
+                items:
+                  type: string
+                type: array
               grantTypes:
                 default:
                 - authorization_code
