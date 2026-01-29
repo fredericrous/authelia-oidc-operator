@@ -89,13 +89,9 @@ type OIDCClientSpec struct {
 	PKCEChallengeMethod string `json:"pkceChallengeMethod,omitempty"`
 
 	// SecretRef references an existing secret containing the client secret
+	// Required for confidential (non-public) clients
 	// +optional
 	SecretRef *SecretReference `json:"secretRef,omitempty"`
-
-	// GenerateSecret indicates if a secret should be generated
-	// +optional
-	// +kubebuilder:default=true
-	GenerateSecret bool `json:"generateSecret,omitempty"`
 }
 
 // SecretReference references a secret in a namespace

@@ -105,21 +105,13 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Assemble the configuration
-	result, err := r.Assembler.Assemble(ctx, oidcClientList.Items, oidcSecrets, r.Config.AutheliaNamespace)
+	result, err := r.Assembler.Assemble(ctx, oidcClientList.Items, oidcSecrets)
 	if err != nil {
 		r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeWarning, "AssemblyFailed", err.Error())
 		if operrors.ShouldRetry(err) {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
-	}
-
-	// Create or update generated secrets
-	for clientID, secretValue := range result.GeneratedSecrets {
-		secretName := fmt.Sprintf("oidc-%s-client", clientID)
-		if err := r.createOrUpdateSecret(ctx, secretName, r.Config.AutheliaNamespace, secretValue); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
 	// Update the Authelia ConfigMap
@@ -143,38 +135,6 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeNormal, "Synced", fmt.Sprintf("Successfully assembled %d OIDC clients", len(oidcClientList.Items)))
 
 	return ctrl.Result{}, nil
-}
-
-// createOrUpdateSecret creates or updates a secret with the given value
-func (r *OIDCClientReconciler) createOrUpdateSecret(ctx context.Context, name, namespace, value string) error {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "authelia-oidc-operator",
-				"app.kubernetes.io/component":  "oidc-secret",
-			},
-		},
-		Type: corev1.SecretTypeOpaque,
-		StringData: map[string]string{
-			"client_secret": value,
-		},
-	}
-
-	existing := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, existing)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return r.Create(ctx, secret)
-		}
-		return err
-	}
-
-	// Update if it already exists
-	existing.StringData = secret.StringData
-	existing.Labels = secret.Labels
-	return r.Update(ctx, existing)
 }
 
 // updateAutheliaConfig updates the Authelia ConfigMap with the assembled configuration

@@ -2,7 +2,6 @@ package assembler
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
@@ -18,8 +17,6 @@ import (
 	securityv1alpha1 "github.com/fredericrous/homelab/authelia-oidc-operator/api/v1alpha1"
 	operrors "github.com/fredericrous/homelab/authelia-oidc-operator/pkg/errors"
 )
-
-// Note: crypto/rand is still needed for generateSecret()
 
 // Assembler handles OIDC configuration assembly for Authelia
 type Assembler struct {
@@ -62,18 +59,14 @@ type AssemblyResult struct {
 	// Clients is the list of assembled OIDC client entries
 	Clients []ClientEntry
 
-	// GeneratedSecrets contains secrets that were generated for clients
-	GeneratedSecrets map[string]string
-
 	// ConfigYAML is the assembled Authelia configuration YAML
 	ConfigYAML string
 }
 
 // Assemble processes all OIDCClients and assembles the Authelia configuration
-func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1.OIDCClient, oidcSecrets *corev1.Secret, autheliaNamespace string) (*AssemblyResult, error) {
+func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1.OIDCClient, oidcSecrets *corev1.Secret) (*AssemblyResult, error) {
 	result := &AssemblyResult{
-		Clients:          make([]ClientEntry, 0, len(oidcClients)),
-		GeneratedSecrets: make(map[string]string),
+		Clients: make([]ClientEntry, 0, len(oidcClients)),
 	}
 
 	// Sort OIDCClients by ClientID for deterministic output
@@ -84,7 +77,7 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 	})
 
 	for _, oc := range sortedClients {
-		clientSecret, err := a.resolveClientSecret(ctx, &oc, result.GeneratedSecrets, autheliaNamespace)
+		clientSecret, err := a.resolveClientSecret(ctx, &oc)
 		if err != nil {
 			return nil, operrors.NewTransientError("failed to resolve client secret", err).
 				WithContext("clientId", oc.Spec.ClientID)
@@ -104,74 +97,51 @@ func (a *Assembler) Assemble(ctx context.Context, oidcClients []securityv1alpha1
 	return result, nil
 }
 
-// resolveClientSecret resolves the client secret from secretRef, existing generated secret, or generates a new one
-func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha1.OIDCClient, generatedSecrets map[string]string, autheliaNamespace string) (string, error) {
+// resolveClientSecret resolves the client secret from secretRef
+// For confidential (non-public) clients, secretRef is required
+func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha1.OIDCClient) (string, error) {
 	// Public clients don't need a secret
 	if oc.Spec.Public {
 		return "", nil
 	}
 
-	if oc.Spec.SecretRef != nil {
-		// Look up the referenced secret
-		namespace := oc.Spec.SecretRef.Namespace
-		if namespace == "" {
-			namespace = oc.ObjectMeta.Namespace
-		}
-
-		secret := &corev1.Secret{}
-		err := a.Client.Get(ctx, types.NamespacedName{
-			Name:      oc.Spec.SecretRef.Name,
-			Namespace: namespace,
-		}, secret)
-		if err != nil {
-			return "", operrors.NewTransientError("failed to get secret", err).
-				WithContext("secretName", oc.Spec.SecretRef.Name).
-				WithContext("namespace", namespace)
-		}
-
-		key := oc.Spec.SecretRef.Key
-		if key == "" {
-			key = "client_secret"
-		}
-
-		secretValue, ok := secret.Data[key]
-		if !ok {
-			return "", operrors.NewConfigError("key not found in secret", nil).
-				WithContext("key", key).
-				WithContext("secretName", oc.Spec.SecretRef.Name)
-		}
-
-		return string(secretValue), nil
-	}
-
-	// Honor the GenerateSecret field - if explicitly set to false, don't generate
-	// But this is a configuration error for confidential clients without a secretRef
-	if !oc.Spec.GenerateSecret {
-		return "", operrors.NewConfigError("confidential client has no secretRef and generateSecret=false", nil).
+	// Confidential clients require a secretRef
+	if oc.Spec.SecretRef == nil {
+		return "", operrors.NewConfigError("confidential client requires secretRef", nil).
 			WithContext("clientId", oc.Spec.ClientID).
-			WithContext("hint", "either provide a secretRef or set generateSecret=true")
+			WithContext("hint", "use ExternalSecrets to manage the client secret and reference it via secretRef")
 	}
 
-	// Check for existing operator-generated secret
-	existingSecretName := fmt.Sprintf("oidc-%s-client", oc.Spec.ClientID)
-	existingSecret := &corev1.Secret{}
+	// Look up the referenced secret
+	namespace := oc.Spec.SecretRef.Namespace
+	if namespace == "" {
+		namespace = oc.ObjectMeta.Namespace
+	}
+
+	secret := &corev1.Secret{}
 	err := a.Client.Get(ctx, types.NamespacedName{
-		Name:      existingSecretName,
-		Namespace: autheliaNamespace,
-	}, existingSecret)
-	if err == nil {
-		// Found existing generated secret, use it
-		if secretValue, ok := existingSecret.Data["client_secret"]; ok {
-			a.Log.V(1).Info("Using existing generated secret", "clientId", oc.Spec.ClientID)
-			return string(secretValue), nil
-		}
+		Name:      oc.Spec.SecretRef.Name,
+		Namespace: namespace,
+	}, secret)
+	if err != nil {
+		return "", operrors.NewTransientError("failed to get secret", err).
+			WithContext("secretName", oc.Spec.SecretRef.Name).
+			WithContext("namespace", namespace)
 	}
 
-	// Generate a new secret
-	a.Log.Info("Generating new client secret", "clientId", oc.Spec.ClientID)
-	clientSecret := generateSecret()
-	generatedSecrets[oc.Spec.ClientID] = clientSecret
-	return clientSecret, nil
+	key := oc.Spec.SecretRef.Key
+	if key == "" {
+		key = "client_secret"
+	}
+
+	secretValue, ok := secret.Data[key]
+	if !ok {
+		return "", operrors.NewConfigError("key not found in secret", nil).
+			WithContext("key", key).
+			WithContext("secretName", oc.Spec.SecretRef.Name)
+	}
+
+	return string(secretValue), nil
 }
 
 // buildClientEntry builds a client entry from an OIDCClient
@@ -308,15 +278,6 @@ func (a *Assembler) buildConfigYAML(clients []ClientEntry, oidcSecrets *corev1.S
 	}
 
 	return string(yamlBytes), nil
-}
-
-// generateSecret generates a random secret
-func generateSecret() string {
-	b := make([]byte, 48)
-	if _, err := rand.Read(b); err != nil {
-		return "changeme"
-	}
-	return base64.RawStdEncoding.EncodeToString(b)
 }
 
 // PHC B64 encoding: standard base64 with . instead of + and no padding

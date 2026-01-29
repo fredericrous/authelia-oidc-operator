@@ -201,17 +201,13 @@ func TestResolveClientSecretPublic(t *testing.T) {
 		},
 	}
 
-	generatedSecrets := make(map[string]string)
-	secret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets, "default")
+	secret, err := a.resolveClientSecret(context.Background(), oidcClient)
 	if err != nil {
 		t.Fatalf("resolveClientSecret() error = %v", err)
 	}
 
 	if secret != "" {
 		t.Errorf("Public client should not have a secret, got %v", secret)
-	}
-	if len(generatedSecrets) != 0 {
-		t.Errorf("No secrets should be generated for public client, got %v", generatedSecrets)
 	}
 }
 
@@ -247,8 +243,7 @@ func TestResolveClientSecretFromRef(t *testing.T) {
 		},
 	}
 
-	generatedSecrets := make(map[string]string)
-	resolvedSecret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets, "default")
+	resolvedSecret, err := a.resolveClientSecret(context.Background(), oidcClient)
 	if err != nil {
 		t.Fatalf("resolveClientSecret() error = %v", err)
 	}
@@ -258,7 +253,7 @@ func TestResolveClientSecretFromRef(t *testing.T) {
 	}
 }
 
-func TestResolveClientSecretGenerated(t *testing.T) {
+func TestResolveClientSecretConfidentialWithoutSecretRef(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = securityv1alpha1.AddToScheme(scheme)
@@ -268,38 +263,19 @@ func TestResolveClientSecretGenerated(t *testing.T) {
 
 	oidcClient := &securityv1alpha1.OIDCClient{
 		Spec: securityv1alpha1.OIDCClientSpec{
-			ClientID:       "generate-secret-client",
-			Public:         false,
-			GenerateSecret: true, // Explicitly set to true (CRD default)
+			ClientID: "confidential-client",
+			Public:   false,
+			// No SecretRef provided
 		},
 	}
 
-	generatedSecrets := make(map[string]string)
-	secret, err := a.resolveClientSecret(context.Background(), oidcClient, generatedSecrets, "default")
-	if err != nil {
-		t.Fatalf("resolveClientSecret() error = %v", err)
+	_, err := a.resolveClientSecret(context.Background(), oidcClient)
+	if err == nil {
+		t.Fatal("resolveClientSecret() should return error for confidential client without secretRef")
 	}
 
-	if secret == "" {
-		t.Error("Non-public client without secretRef should have generated secret")
-	}
-	if _, ok := generatedSecrets["generate-secret-client"]; !ok {
-		t.Error("Generated secret should be stored in generatedSecrets map")
-	}
-}
-
-func TestGenerateSecret(t *testing.T) {
-	secret1 := generateSecret()
-	secret2 := generateSecret()
-
-	if secret1 == "" {
-		t.Error("generateSecret() should not return empty string")
-	}
-	if secret1 == secret2 {
-		t.Error("generateSecret() should return different values on each call")
-	}
-	if len(secret1) < 32 {
-		t.Errorf("generateSecret() should return sufficiently long secret, got length %d", len(secret1))
+	if !strings.Contains(err.Error(), "confidential client requires secretRef") {
+		t.Errorf("error message should mention secretRef requirement, got: %v", err)
 	}
 }
 
@@ -352,16 +328,33 @@ func TestAssemble(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 	_ = securityv1alpha1.AddToScheme(scheme)
 
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	// Create secrets for confidential clients
+	client1Secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "client1-secret",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"client_secret": []byte("client1-secret-value"),
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(client1Secret).Build()
 	a := NewAssembler(fakeClient, logr.Discard())
 
 	oidcClients := []securityv1alpha1.OIDCClient{
 		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "client1",
+				Namespace: "default",
+			},
 			Spec: securityv1alpha1.OIDCClientSpec{
-				ClientID:       "client1",
-				ClientName:     "Client 1",
-				RedirectURIs:   []string{"https://client1.example.com/callback"},
-				GenerateSecret: true, // Explicitly set to true (CRD default)
+				ClientID:     "client1",
+				ClientName:   "Client 1",
+				RedirectURIs: []string{"https://client1.example.com/callback"},
+				SecretRef: &securityv1alpha1.SecretReference{
+					Name: "client1-secret",
+				},
 			},
 		},
 		{
@@ -374,7 +367,7 @@ func TestAssemble(t *testing.T) {
 		},
 	}
 
-	result, err := a.Assemble(context.Background(), oidcClients, nil, "default")
+	result, err := a.Assemble(context.Background(), oidcClients, nil)
 	if err != nil {
 		t.Fatalf("Assemble() error = %v", err)
 	}
@@ -383,17 +376,67 @@ func TestAssemble(t *testing.T) {
 		t.Errorf("Expected 2 clients, got %d", len(result.Clients))
 	}
 
-	// client1 should have a generated secret
-	if _, ok := result.GeneratedSecrets["client1"]; !ok {
-		t.Error("client1 should have a generated secret")
-	}
-
-	// client2 (public) should not have a generated secret
-	if _, ok := result.GeneratedSecrets["client2"]; ok {
-		t.Error("client2 (public) should not have a generated secret")
-	}
-
 	if result.ConfigYAML == "" {
 		t.Error("ConfigYAML should not be empty")
+	}
+
+	// Verify client1 has a hashed secret
+	var client1Entry *ClientEntry
+	for i := range result.Clients {
+		if result.Clients[i].ClientID == "client1" {
+			client1Entry = &result.Clients[i]
+			break
+		}
+	}
+	if client1Entry == nil {
+		t.Fatal("client1 not found in results")
+	}
+	if !strings.HasPrefix(client1Entry.ClientSecret, "$pbkdf2-sha512$") {
+		t.Errorf("client1 should have hashed secret, got %v", client1Entry.ClientSecret)
+	}
+
+	// Verify client2 (public) has no secret
+	var client2Entry *ClientEntry
+	for i := range result.Clients {
+		if result.Clients[i].ClientID == "client2" {
+			client2Entry = &result.Clients[i]
+			break
+		}
+	}
+	if client2Entry == nil {
+		t.Fatal("client2 not found in results")
+	}
+	if client2Entry.ClientSecret != "" {
+		t.Errorf("client2 (public) should have no secret, got %v", client2Entry.ClientSecret)
+	}
+}
+
+func TestAssembleConfidentialClientWithoutSecretRef(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = securityv1alpha1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	a := NewAssembler(fakeClient, logr.Discard())
+
+	oidcClients := []securityv1alpha1.OIDCClient{
+		{
+			Spec: securityv1alpha1.OIDCClientSpec{
+				ClientID:     "confidential-client",
+				ClientName:   "Confidential Client",
+				Public:       false,
+				RedirectURIs: []string{"https://example.com/callback"},
+				// No SecretRef - should fail
+			},
+		},
+	}
+
+	_, err := a.Assemble(context.Background(), oidcClients, nil)
+	if err == nil {
+		t.Fatal("Assemble() should fail for confidential client without secretRef")
+	}
+
+	if !strings.Contains(err.Error(), "secretRef") {
+		t.Errorf("error should mention secretRef, got: %v", err)
 	}
 }

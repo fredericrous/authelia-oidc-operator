@@ -76,10 +76,6 @@ spec:
                 - implicit
                 - pre-configured
                 type: string
-              generateSecret:
-                default: true
-                description: GenerateSecret indicates if a secret should be generated
-                type: boolean
               grantTypes:
                 default:
                 - authorization_code
@@ -141,8 +137,9 @@ spec:
                   type: string
                 type: array
               secretRef:
-                description: SecretRef references an existing secret containing the
-                  client secret
+                description: |-
+                  SecretRef references an existing secret containing the client secret
+                  Required for confidential (non-public) clients
                 properties:
                   key:
                     default: client_secret
