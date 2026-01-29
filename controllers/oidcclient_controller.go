@@ -223,8 +223,10 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		return operrors.NewPermanentError("failed to deep merge configs", err)
 	}
 
-	// Post-process: merge clients by client_id (deepmerge replaces slices, we want to merge by ID)
-	mergedYAML, err = r.mergeClientsByID([]byte(baseYAML), mergedYAML)
+	// Post-process: merge clients by client_id
+	// deepmerge concatenates arrays, so we need to dedupe by client_id
+	// CRD clients take precedence over base clients
+	mergedYAML, err = r.mergeClientsByID([]byte(baseYAML), []byte(result.ConfigYAML), mergedYAML)
 	if err != nil {
 		return operrors.NewPermanentError("failed to merge clients", err)
 	}
@@ -285,11 +287,14 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 	return r.Update(ctx, existing)
 }
 
-// mergeClientsByID ensures base clients not managed by CRDs are preserved
-// deepmerge replaces slices, but we want to merge clients by client_id
-func (r *OIDCClientReconciler) mergeClientsByID(baseYAML, mergedYAML []byte) ([]byte, error) {
-	var baseConfig, mergedConfig map[string]any
+// mergeClientsByID merges clients from base config and CRD-assembled config
+// CRD clients take precedence; base clients not in CRDs are preserved
+func (r *OIDCClientReconciler) mergeClientsByID(baseYAML, crdYAML, mergedYAML []byte) ([]byte, error) {
+	var baseConfig, crdConfig, mergedConfig map[string]any
 	if err := yaml.Unmarshal(baseYAML, &baseConfig); err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(crdYAML, &crdConfig); err != nil {
 		return nil, err
 	}
 	if err := yaml.Unmarshal(mergedYAML, &mergedConfig); err != nil {
@@ -297,26 +302,27 @@ func (r *OIDCClientReconciler) mergeClientsByID(baseYAML, mergedYAML []byte) ([]
 	}
 
 	baseClients := getClients(baseConfig)
-	mergedClients := getClients(mergedConfig)
+	crdClients := getClients(crdConfig)
 
-	// Build set of merged client IDs
-	mergedClientIDs := make(map[string]struct{}, len(mergedClients))
-	for _, c := range mergedClients {
+	// Build set of CRD-managed client IDs
+	crdClientIDs := make(map[string]struct{}, len(crdClients))
+	for _, c := range crdClients {
 		if id := getClientID(c); id != "" {
-			mergedClientIDs[id] = struct{}{}
+			crdClientIDs[id] = struct{}{}
 		}
 	}
 
-	// Append base clients not present in merged
+	// Start with CRD clients, then add base clients not managed by CRDs
+	finalClients := crdClients
 	for _, c := range baseClients {
 		if id := getClientID(c); id != "" {
-			if _, exists := mergedClientIDs[id]; !exists {
-				mergedClients = append(mergedClients, c)
+			if _, isCRDManaged := crdClientIDs[id]; !isCRDManaged {
+				finalClients = append(finalClients, c)
 			}
 		}
 	}
 
-	setClients(mergedConfig, mergedClients)
+	setClients(mergedConfig, finalClients)
 	return yaml.Marshal(mergedConfig)
 }
 
