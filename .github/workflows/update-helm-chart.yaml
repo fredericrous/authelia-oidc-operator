@@ -81,48 +81,18 @@ jobs:
 
           CURRENT_CHART_VERSION=$(yq '.version' "$CHART_PATH")
           CURRENT_APP_VERSION=$(yq '.appVersion' "$CHART_PATH")
-          NEW_APP_VERSION="${{ steps.version.outputs.version }}"
+          NEW_VERSION="${{ steps.version.outputs.version }}"
 
           echo "Current state:"
           echo "- Chart version: $CURRENT_CHART_VERSION"
-          echo "- App version: $CURRENT_APP_VERSION -> $NEW_APP_VERSION"
+          echo "- App version: $CURRENT_APP_VERSION"
+          echo "New version: $NEW_VERSION (chart and app will be synced)"
 
-          yq -i ".appVersion = \"$NEW_APP_VERSION\"" "$CHART_PATH"
+          # Keep chart version = app version (same as vault-transit-unseal-operator)
+          yq -i ".version = \"$NEW_VERSION\"" "$CHART_PATH"
+          yq -i ".appVersion = \"$NEW_VERSION\"" "$CHART_PATH"
 
-          if [[ "${{ github.event.inputs.bump_chart_version }}" != "false" ]]; then
-            IFS='.' read -r CHART_MAJOR CHART_MINOR CHART_PATCH <<< "$CURRENT_CHART_VERSION"
-            IFS='.' read -r OLD_APP_MAJOR OLD_APP_MINOR OLD_APP_PATCH <<< "${CURRENT_APP_VERSION#v}"
-            IFS='.' read -r NEW_APP_MAJOR NEW_APP_MINOR NEW_APP_PATCH <<< "${NEW_APP_VERSION#v}"
-
-            BUMP_TYPE="${{ github.event.inputs.version_bump_type || 'auto' }}"
-
-            if [[ "$BUMP_TYPE" == "auto" ]]; then
-              if [[ "$NEW_APP_MAJOR" -gt "$OLD_APP_MAJOR" ]]; then
-                echo "Detected major version change in app"
-                NEW_CHART_VERSION="$((CHART_MAJOR + 1)).0.0"
-              elif [[ "$NEW_APP_MINOR" -gt "$OLD_APP_MINOR" ]]; then
-                echo "Detected minor version change in app"
-                NEW_CHART_VERSION="$CHART_MAJOR.$((CHART_MINOR + 1)).0"
-              else
-                echo "Detected patch version change in app"
-                NEW_CHART_VERSION="$CHART_MAJOR.$CHART_MINOR.$((CHART_PATCH + 1))"
-              fi
-            elif [[ "$BUMP_TYPE" == "major" ]]; then
-              NEW_CHART_VERSION="$((CHART_MAJOR + 1)).0.0"
-            elif [[ "$BUMP_TYPE" == "minor" ]]; then
-              NEW_CHART_VERSION="$CHART_MAJOR.$((CHART_MINOR + 1)).0"
-            else
-              NEW_CHART_VERSION="$CHART_MAJOR.$CHART_MINOR.$((CHART_PATCH + 1))"
-            fi
-
-            echo "Updating chart version: $CURRENT_CHART_VERSION -> $NEW_CHART_VERSION"
-            yq -i ".version = \"$NEW_CHART_VERSION\"" "$CHART_PATH"
-            echo "chart_version=$NEW_CHART_VERSION" >> $GITHUB_OUTPUT
-            echo "version_bump_reason=$BUMP_TYPE" >> $GITHUB_OUTPUT
-          else
-            CHART_VERSION=$(yq '.version' "$CHART_PATH")
-            echo "chart_version=$CHART_VERSION" >> $GITHUB_OUTPUT
-          fi
+          echo "chart_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
           echo "Updated Chart.yaml:"
           cat "$CHART_PATH"
@@ -165,9 +135,7 @@ jobs:
             ## Automated Chart Update
 
             This PR updates the authelia-oidc-operator Helm chart:
-            - **appVersion**: `${{ steps.version.outputs.version }}`
-            - **Chart version**: `${{ steps.update-chart.outputs.chart_version }}`
-            - **Version bump type**: ${{ steps.update-chart.outputs.version_bump_reason }}
+            - **Version**: `${{ steps.update-chart.outputs.chart_version }}` (chart and app synced)
 
             ### Files Updated
             - `charts/authelia-oidc-operator/Chart.yaml` - Updated appVersion and chart version
