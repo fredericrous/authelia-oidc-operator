@@ -62,11 +62,10 @@ jobs:
           token: ${{ secrets.CHARTS_REPO_TOKEN }}
           path: charts
 
-      - name: Sync CRD from operator
+      - name: Sync CRDs from operator
         run: |
-          echo "Syncing CRD from operator to chart..."
-          cp -v operator/config/crd/bases/security.homelab.io_oidcclients.yaml \
-               charts/charts/authelia-oidc-operator/crds/oidcclients-crd.yaml
+          echo "Syncing all CRDs from operator to chart..."
+          cp -v operator/config/crd/bases/*.yaml charts/charts/authelia-oidc-operator/crds/
 
           # Verify the copy and show diff
           cd charts
@@ -139,7 +138,7 @@ jobs:
 
             ### Files Updated
             - `charts/authelia-oidc-operator/Chart.yaml` - Updated appVersion and chart version
-            - `charts/authelia-oidc-operator/crds/oidcclients-crd.yaml` - Synced CRD from operator
+            - `charts/authelia-oidc-operator/crds/*.yaml` - Synced all CRDs from operator
             - `README.md` - Updated chart version and app version in charts table
 
             ### What's Changed
