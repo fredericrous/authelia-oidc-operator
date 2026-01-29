@@ -268,8 +268,9 @@ func TestResolveClientSecretGenerated(t *testing.T) {
 
 	oidcClient := &securityv1alpha1.OIDCClient{
 		Spec: securityv1alpha1.OIDCClientSpec{
-			ClientID: "generate-secret-client",
-			Public:   false,
+			ClientID:       "generate-secret-client",
+			Public:         false,
+			GenerateSecret: true, // Explicitly set to true (CRD default)
 		},
 	}
 
@@ -357,9 +358,10 @@ func TestAssemble(t *testing.T) {
 	oidcClients := []securityv1alpha1.OIDCClient{
 		{
 			Spec: securityv1alpha1.OIDCClientSpec{
-				ClientID:     "client1",
-				ClientName:   "Client 1",
-				RedirectURIs: []string{"https://client1.example.com/callback"},
+				ClientID:       "client1",
+				ClientName:     "Client 1",
+				RedirectURIs:   []string{"https://client1.example.com/callback"},
+				GenerateSecret: true, // Explicitly set to true (CRD default)
 			},
 		},
 		{

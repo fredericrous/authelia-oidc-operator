@@ -214,7 +214,13 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		if existingConfig["identity_providers"] == nil {
 			existingConfig["identity_providers"] = make(map[string]interface{})
 		}
-		existingIP := existingConfig["identity_providers"].(map[string]interface{})
+		// Safe type assertion to avoid panic
+		existingIP, ok := existingConfig["identity_providers"].(map[string]interface{})
+		if !ok {
+			// If identity_providers exists but is not a map, replace it entirely
+			existingConfig["identity_providers"] = make(map[string]interface{})
+			existingIP = existingConfig["identity_providers"].(map[string]interface{})
+		}
 		for k, v := range identityProviders {
 			existingIP[k] = v
 		}
@@ -226,8 +232,8 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		return operrors.NewPermanentError("failed to marshal merged config", err)
 	}
 
-	// Compute hash of the OIDC config to detect changes
-	oidcConfigHash := computeHash(result.ConfigYAML)
+	// Compute combined hash of base config + OIDC config to detect any changes
+	combinedHash := computeHash(configYAML + result.ConfigYAML)
 
 	existing := &corev1.ConfigMap{}
 	err = r.Get(ctx, types.NamespacedName{Name: r.Config.AutheliaConfigMapName, Namespace: r.Config.AutheliaNamespace}, existing)
@@ -242,7 +248,7 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 						"app.kubernetes.io/managed-by": "authelia-oidc-operator",
 					},
 					Annotations: map[string]string{
-						"authelia.homelab.io/oidc-config-hash": oidcConfigHash,
+						"authelia.homelab.io/oidc-config-hash": combinedHash,
 					},
 				},
 				Data: map[string]string{
@@ -261,7 +267,7 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		existingHash = existing.Annotations["authelia.homelab.io/oidc-config-hash"]
 	}
 
-	if existingHash == oidcConfigHash {
+	if existingHash == combinedHash {
 		log.V(1).Info("Authelia ConfigMap unchanged (hash match), skipping update")
 		return nil
 	}
@@ -277,8 +283,8 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 	if existing.Annotations == nil {
 		existing.Annotations = make(map[string]string)
 	}
-	existing.Annotations["authelia.homelab.io/oidc-config-hash"] = oidcConfigHash
-	log.Info("Updating Authelia ConfigMap", "name", r.Config.AutheliaConfigMapName, "hash", oidcConfigHash)
+	existing.Annotations["authelia.homelab.io/oidc-config-hash"] = combinedHash
+	log.Info("Updating Authelia ConfigMap", "name", r.Config.AutheliaConfigMapName, "hash", combinedHash)
 	return r.Update(ctx, existing)
 }
 

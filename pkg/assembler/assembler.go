@@ -144,6 +144,12 @@ func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha
 		return string(secretValue), nil
 	}
 
+	// Honor the GenerateSecret field - if explicitly set to false, don't generate
+	if !oc.Spec.GenerateSecret {
+		a.Log.Info("Secret generation disabled for client", "clientId", oc.Spec.ClientID)
+		return "", nil
+	}
+
 	// Check for existing operator-generated secret
 	existingSecretName := fmt.Sprintf("oidc-%s-client", oc.Spec.ClientID)
 	existingSecret := &corev1.Secret{}
@@ -196,7 +202,12 @@ func (a *Assembler) buildClientEntry(oc *securityv1alpha1.OIDCClient, clientSecr
 
 	tokenAuthMethod := oc.Spec.TokenEndpointAuthMethod
 	if tokenAuthMethod == "" {
-		tokenAuthMethod = "client_secret_basic"
+		if oc.Spec.Public {
+			// Public clients should use "none" for token endpoint auth
+			tokenAuthMethod = "none"
+		} else {
+			tokenAuthMethod = "client_secret_basic"
+		}
 	}
 
 	pkceChallengeMethod := oc.Spec.PKCEChallengeMethod
