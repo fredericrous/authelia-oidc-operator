@@ -232,8 +232,9 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		return operrors.NewPermanentError("failed to marshal merged config", err)
 	}
 
-	// Compute combined hash of base config + OIDC config to detect any changes
-	combinedHash := computeHash(configYAML + result.ConfigYAML)
+	// Compute hash of the final merged YAML to detect any changes
+	// This is more reliable than hashing inputs separately as YAML marshal order is deterministic
+	combinedHash := computeHash(string(mergedYAML))
 
 	existing := &corev1.ConfigMap{}
 	err = r.Get(ctx, types.NamespacedName{Name: r.Config.AutheliaConfigMapName, Namespace: r.Config.AutheliaNamespace}, existing)

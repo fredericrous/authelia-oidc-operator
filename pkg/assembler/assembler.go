@@ -145,9 +145,11 @@ func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha
 	}
 
 	// Honor the GenerateSecret field - if explicitly set to false, don't generate
+	// But this is a configuration error for confidential clients without a secretRef
 	if !oc.Spec.GenerateSecret {
-		a.Log.Info("Secret generation disabled for client", "clientId", oc.Spec.ClientID)
-		return "", nil
+		return "", operrors.NewConfigError("confidential client has no secretRef and generateSecret=false", nil).
+			WithContext("clientId", oc.Spec.ClientID).
+			WithContext("hint", "either provide a secretRef or set generateSecret=true")
 	}
 
 	// Check for existing operator-generated secret
