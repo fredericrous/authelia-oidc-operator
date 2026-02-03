@@ -5,10 +5,9 @@ on:
     branches: [ main ]
 
 env:
-  GO_VERSION: '1.25'
   ENVTEST_K8S_VERSION: '1.29.0'
   REGISTRY: ghcr.io
-  IMAGE_NAME: fredericrous/authelia-oidc-operator
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   test:
@@ -21,7 +20,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
           cache: false
 
       - name: Cache Go modules

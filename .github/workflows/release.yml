@@ -33,7 +33,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
           cache: false
 
       - name: Cache Go modules
@@ -106,8 +106,10 @@ jobs:
             COMMITS=$(git log --pretty=format:"- %s")
           fi
 
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+
           cat > release-notes.md << EOF
-          ## Authelia OIDC Operator $VERSION
+          ## ${REPO_NAME} $VERSION
 
           ### Docker Image
           \`\`\`bash
@@ -116,13 +118,9 @@ jobs:
 
           ### Installation
           \`\`\`bash
-          # Using Helm
           helm repo add fredericrous https://fredericrous.github.io/charts
           helm repo update
-          helm install authelia-oidc-operator fredericrous/authelia-oidc-operator -n authelia
-
-          # Or manually
-          kubectl apply -f https://raw.githubusercontent.com/fredericrous/authelia-oidc-operator/main/config/crd/bases/security.homelab.io_oidcclients.yaml
+          helm install ${REPO_NAME} fredericrous/${REPO_NAME}
           \`\`\`
 
           ### What's Changed
@@ -140,7 +138,6 @@ jobs:
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
           generate_release_notes: true
 
-      # Trigger post-release workflow using PAT with workflow scope
       - name: Trigger Post-Release Workflow
         if: success()
         env:

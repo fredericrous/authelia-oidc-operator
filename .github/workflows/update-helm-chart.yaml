@@ -67,11 +67,17 @@ jobs:
           CHART_NAME="${{ github.event.repository.name }}"
           CHART_DIR="charts/charts/${CHART_NAME}"
 
-          echo "Syncing all CRDs from operator to chart..."
-          cp -v operator/config/crd/bases/*.yaml "${CHART_DIR}/crds/"
+          # Sync CRDs
+          if [ -d "operator/config/crd/bases" ]; then
+            echo "Syncing CRDs from operator to chart..."
+            mkdir -p "${CHART_DIR}/crds"
+            cp -v operator/config/crd/bases/*.yaml "${CHART_DIR}/crds/"
+          fi
 
-          echo "Generating ClusterRole template from operator RBAC..."
-          cat > "${CHART_DIR}/templates/clusterrole.yaml" << EOF
+          # Sync ClusterRole from operator RBAC
+          if [ -f "operator/config/rbac/role.yaml" ]; then
+            echo "Generating ClusterRole template from operator RBAC..."
+            cat > "${CHART_DIR}/templates/clusterrole.yaml" << EOF
           apiVersion: rbac.authorization.k8s.io/v1
           kind: ClusterRole
           metadata:
@@ -79,8 +85,9 @@ jobs:
             labels:
               {{- include "${CHART_NAME}.labels" . | nindent 4 }}
           EOF
-          echo "rules:" >> "${CHART_DIR}/templates/clusterrole.yaml"
-          yq '.rules' operator/config/rbac/role.yaml | sed 's/^/  /' >> "${CHART_DIR}/templates/clusterrole.yaml"
+            echo "rules:" >> "${CHART_DIR}/templates/clusterrole.yaml"
+            yq '.rules' operator/config/rbac/role.yaml | sed 's/^/  /' >> "${CHART_DIR}/templates/clusterrole.yaml"
+          fi
 
           cd charts
           git diff --stat || true
@@ -90,7 +97,13 @@ jobs:
         id: update-chart
         run: |
           cd charts
-          CHART_PATH="charts/authelia-oidc-operator/Chart.yaml"
+          CHART_NAME="${{ github.event.repository.name }}"
+          CHART_PATH="charts/${CHART_NAME}/Chart.yaml"
+
+          if [ ! -f "$CHART_PATH" ]; then
+            echo "::error::Chart not found at $CHART_PATH"
+            exit 1
+          fi
 
           CURRENT_CHART_VERSION=$(yq '.version' "$CHART_PATH")
           CURRENT_APP_VERSION=$(yq '.appVersion' "$CHART_PATH")
@@ -101,11 +114,15 @@ jobs:
           echo "- App version: $CURRENT_APP_VERSION"
           echo "New version: $NEW_VERSION (chart and app will be synced)"
 
-          # Keep chart version = app version (same as vault-transit-unseal-operator)
+          # Keep chart version = app version
           yq -i ".version = \"$NEW_VERSION\"" "$CHART_PATH"
           yq -i ".appVersion = \"$NEW_VERSION\"" "$CHART_PATH"
 
+          CHART_DESCRIPTION=$(yq '.description' "$CHART_PATH")
+
           echo "chart_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "chart_name=$CHART_NAME" >> $GITHUB_OUTPUT
+          echo "chart_description=$CHART_DESCRIPTION" >> $GITHUB_OUTPUT
 
           echo "Updated Chart.yaml:"
           cat "$CHART_PATH"
@@ -114,16 +131,17 @@ jobs:
         run: |
           cd charts
           README_FILE="README.md"
-          CHART_NAME="authelia-oidc-operator"
+          CHART_NAME="${{ steps.update-chart.outputs.chart_name }}"
           CHART_VERSION="${{ steps.update-chart.outputs.chart_version }}"
           APP_VERSION="${{ steps.version.outputs.version }}"
+          CHART_DESCRIPTION="${{ steps.update-chart.outputs.chart_description }}"
 
           if [ -f "$README_FILE" ]; then
             if grep -q "\[${CHART_NAME}\]" "$README_FILE"; then
               echo "Updating existing chart entry in README.md"
               while IFS= read -r line; do
                 if [[ "$line" == *"[${CHART_NAME}]"* ]]; then
-                  echo "| [${CHART_NAME}](charts/${CHART_NAME}/) | ${CHART_VERSION} | ${APP_VERSION} | A Kubernetes operator that manages OIDC client configurations for Authelia |"
+                  echo "| [${CHART_NAME}](charts/${CHART_NAME}/) | ${CHART_VERSION} | ${APP_VERSION} | ${CHART_DESCRIPTION} |"
                 else
                   echo "$line"
                 fi
@@ -140,20 +158,20 @@ jobs:
           token: ${{ secrets.CHARTS_REPO_TOKEN }}
           path: charts
           add-paths: |
-            charts/${{ github.event.repository.name }}/**
+            charts/${{ steps.update-chart.outputs.chart_name }}/**
             README.md
-          commit-message: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
-          title: "chore: update authelia-oidc-operator to ${{ steps.version.outputs.version }}"
+          commit-message: "chore: update ${{ steps.update-chart.outputs.chart_name }} to ${{ steps.version.outputs.version }}"
+          title: "chore: update ${{ steps.update-chart.outputs.chart_name }} to ${{ steps.version.outputs.version }}"
           body: |
             ## Automated Chart Update
 
-            This PR updates the authelia-oidc-operator Helm chart:
+            This PR updates the ${{ steps.update-chart.outputs.chart_name }} Helm chart:
             - **Version**: `${{ steps.update-chart.outputs.chart_version }}` (chart and app synced)
 
             ### Files Updated
-            - `charts/authelia-oidc-operator/Chart.yaml` - Updated appVersion and chart version
-            - `charts/authelia-oidc-operator/crds/*.yaml` - Synced all CRDs from operator
-            - `charts/authelia-oidc-operator/templates/clusterrole.yaml` - Synced RBAC rules from operator
+            - `charts/${{ steps.update-chart.outputs.chart_name }}/Chart.yaml` - Updated appVersion and chart version
+            - `charts/${{ steps.update-chart.outputs.chart_name }}/crds/*.yaml` - Synced CRDs from operator
+            - `charts/${{ steps.update-chart.outputs.chart_name }}/templates/clusterrole.yaml` - Synced RBAC rules from operator
             - `README.md` - Updated chart version and app version in charts table
 
             ### What's Changed
@@ -164,13 +182,13 @@ jobs:
 
             After merging this PR, create a new release tag:
             ```bash
-            git tag authelia-oidc-operator-v${{ steps.update-chart.outputs.chart_version }}
-            git push origin authelia-oidc-operator-v${{ steps.update-chart.outputs.chart_version }}
+            git tag ${{ steps.update-chart.outputs.chart_name }}-v${{ steps.update-chart.outputs.chart_version }}
+            git push origin ${{ steps.update-chart.outputs.chart_name }}-v${{ steps.update-chart.outputs.chart_version }}
             ```
 
             ---
-            *This PR was automatically generated when [operator version ${{ steps.version.outputs.version }}](https://github.com/fredericrous/authelia-oidc-operator/releases/tag/v${{ steps.version.outputs.version }}) was released.*
-          branch: update-authelia-oidc-operator-${{ steps.version.outputs.version }}
+            *This PR was automatically generated when [operator version ${{ steps.version.outputs.version }}](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }}) was released.*
+          branch: update-${{ steps.update-chart.outputs.chart_name }}-${{ steps.version.outputs.version }}
           base: main
           labels: |
             chart-update
@@ -191,11 +209,11 @@ jobs:
             ```bash
             git clone https://github.com/fredericrous/charts.git
             cd charts
-            git checkout update-authelia-oidc-operator-${{ steps.version.outputs.version }}
+            git checkout update-${{ steps.update-chart.outputs.chart_name }}-${{ steps.version.outputs.version }}
 
-            helm template authelia-oidc-operator ./charts/authelia-oidc-operator
-            helm lint ./charts/authelia-oidc-operator
-            helm install test-release ./charts/authelia-oidc-operator --dry-run --debug
+            helm template ${{ steps.update-chart.outputs.chart_name }} ./charts/${{ steps.update-chart.outputs.chart_name }}
+            helm lint ./charts/${{ steps.update-chart.outputs.chart_name }}
+            helm install test-release ./charts/${{ steps.update-chart.outputs.chart_name }} --dry-run --debug
             ```
 
       - name: Enable auto-merge

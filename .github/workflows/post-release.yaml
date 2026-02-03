@@ -34,8 +34,8 @@ jobs:
           WORKFLOW_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
         run: |
           if [ -z "$WORKFLOW_TOKEN" ]; then
-            echo "::error::WORKFLOW_TOKEN not set, cannot trigger Helm chart update"
-            exit 1
+            echo "::warning::WORKFLOW_TOKEN not set, skipping Helm chart update"
+            exit 0
           fi
 
           VERSION="${{ steps.version.outputs.version }}"
@@ -55,6 +55,8 @@ jobs:
 
           if [ "$HTTP_STATUS" == "204" ]; then
             echo "Successfully triggered Helm chart update for version ${VERSION}"
+          elif [ "$HTTP_STATUS" == "404" ]; then
+            echo "::warning::Helm chart update workflow not found, skipping"
           else
             echo "::error::Failed to trigger Helm chart update"
             echo "::error::HTTP Status: $HTTP_STATUS"
@@ -66,4 +68,3 @@ jobs:
         if: success()
         run: |
           echo "Release v${{ steps.version.outputs.version }} published successfully"
-          echo "Helm chart update triggered"
