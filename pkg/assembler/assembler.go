@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/crypto/pbkdf2"
@@ -73,14 +74,23 @@ type UserAttributeEntry struct {
 	Expression string `json:"expression"`
 }
 
+// AccessControlRule represents an access_control rule for Authelia configuration
+type AccessControlRule struct {
+	Domain   string   `json:"domain"`
+	Policy   string   `json:"policy"`
+	Subject  string   `json:"subject,omitempty"`  // Single subject (Authelia format)
+	Subjects []string `json:"subjects,omitempty"` // Multiple subjects (Authelia format)
+}
+
 // AssemblyResult contains the result of OIDC configuration assembly
 type AssemblyResult struct {
-	Clients        []ClientEntry
-	ClaimsPolicies map[string]ClaimsPolicyEntry
-	Scopes         map[string]ScopeEntry
-	UserAttributes map[string]UserAttributeEntry
-	JWKS           []map[string]any
-	ConfigYAML     string
+	Clients            []ClientEntry
+	ClaimsPolicies     map[string]ClaimsPolicyEntry
+	Scopes             map[string]ScopeEntry
+	UserAttributes     map[string]UserAttributeEntry
+	AccessControlRules []AccessControlRule
+	JWKS               []map[string]any
+	ConfigYAML         string
 }
 
 // Default values for OIDC clients
@@ -106,11 +116,12 @@ func (a *Assembler) Assemble(
 	}
 
 	result := &AssemblyResult{
-		Clients:        make([]ClientEntry, 0, len(oidcClients)),
-		ClaimsPolicies: a.buildClaimsPolicies(claimsPolicies),
-		Scopes:         a.buildScopes(claimsPolicies),
-		UserAttributes: a.buildUserAttributes(userAttributes),
-		JWKS:           a.buildJWKS(oidcSecrets),
+		Clients:            make([]ClientEntry, 0, len(oidcClients)),
+		ClaimsPolicies:     a.buildClaimsPolicies(claimsPolicies),
+		Scopes:             a.buildScopes(claimsPolicies),
+		UserAttributes:     a.buildUserAttributes(userAttributes),
+		AccessControlRules: a.buildAccessControlRules(oidcClients),
+		JWKS:               a.buildJWKS(oidcSecrets),
 	}
 
 	// Build clients (sorted by ClientID for deterministic output)
@@ -150,6 +161,7 @@ func (a *Assembler) validate(
 		func() error { return a.DetectScopeNameCollisions(claimsPolicies) },
 		func() error { return a.ValidateClaimsPolicies(claimsPolicies, userAttributes) },
 		func() error { return a.ValidateOIDCClientPolicies(oidcClients, claimsPolicies) },
+		func() error { return a.ValidateAccessControlSubjects(oidcClients) },
 	}
 
 	for _, validate := range validators {
@@ -168,6 +180,47 @@ func (a *Assembler) buildUserAttributes(attrs []securityv1alpha1.UserAttribute) 
 		result[attr.GetResolvedName()] = UserAttributeEntry{Expression: attr.Spec.Expression}
 	}
 	return result
+}
+
+// buildAccessControlRules transforms OIDCClient access control specs into Authelia rules
+func (a *Assembler) buildAccessControlRules(clients []securityv1alpha1.OIDCClient) []AccessControlRule {
+	var rules []AccessControlRule
+
+	for _, oc := range clients {
+		if oc.Spec.AccessControl == nil {
+			continue
+		}
+
+		ac := oc.Spec.AccessControl
+		rule := AccessControlRule{
+			Domain: ac.Domain,
+			Policy: cmp.Or(ac.Policy, "two_factor"),
+		}
+
+		// Authelia uses "subject" for single, "subjects" for multiple
+		if len(ac.Subjects) == 1 {
+			rule.Subject = ac.Subjects[0]
+		} else if len(ac.Subjects) > 1 {
+			rule.Subjects = ac.Subjects
+		}
+
+		rules = append(rules, rule)
+	}
+
+	// Sort: specific domains before wildcards, then alphabetically
+	slices.SortFunc(rules, func(a, b AccessControlRule) int {
+		aWild := strings.HasPrefix(a.Domain, "*")
+		bWild := strings.HasPrefix(b.Domain, "*")
+		if aWild != bWild {
+			if aWild {
+				return 1 // a (wildcard) goes after b (specific)
+			}
+			return -1 // a (specific) goes before b (wildcard)
+		}
+		return cmp.Compare(a.Domain, b.Domain)
+	})
+
+	return rules
 }
 
 // buildClaimsPolicies transforms ClaimsPolicy CRDs to config entries
@@ -348,6 +401,13 @@ func (a *Assembler) buildConfigYAML(result *AssemblyResult) (string, error) {
 	if len(result.UserAttributes) > 0 {
 		config["definitions"] = map[string]any{
 			"user_attributes": result.UserAttributes,
+		}
+	}
+
+	// Add access_control rules if any OIDCClients define them
+	if len(result.AccessControlRules) > 0 {
+		config["access_control"] = map[string]any{
+			"rules": result.AccessControlRules,
 		}
 	}
 

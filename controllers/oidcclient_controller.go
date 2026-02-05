@@ -1,10 +1,13 @@
 package controllers
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/TwiN/deepmerge"
@@ -231,6 +234,13 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 		return operrors.NewPermanentError("failed to merge clients", err)
 	}
 
+	// Post-process: merge access_control rules
+	// CRD rules take precedence over base rules for the same domain
+	mergedYAML, err = r.mergeAccessControlRules([]byte(baseYAML), []byte(result.ConfigYAML), mergedYAML)
+	if err != nil {
+		return operrors.NewPermanentError("failed to merge access_control rules", err)
+	}
+
 	// Compute hash of the final merged YAML to detect any changes
 	combinedHash := computeHash(string(mergedYAML))
 
@@ -285,6 +295,53 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 	existing.Annotations["authelia.homelab.io/oidc-config-hash"] = combinedHash
 	log.Info("Updating Authelia ConfigMap", "name", r.Config.AutheliaConfigMapName, "hash", combinedHash)
 	return r.Update(ctx, existing)
+}
+
+// mergeAccessControlRules merges access_control rules from base config and CRD-assembled config
+// CRD rules appear first, then base rules (excluding duplicates by domain)
+// Within the merged result, specific domains come before wildcards
+func (r *OIDCClientReconciler) mergeAccessControlRules(baseYAML, crdYAML, mergedYAML []byte) ([]byte, error) {
+	var baseConfig, crdConfig, mergedConfig map[string]any
+	if err := yaml.Unmarshal(baseYAML, &baseConfig); err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(crdYAML, &crdConfig); err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(mergedYAML, &mergedConfig); err != nil {
+		return nil, err
+	}
+
+	crdRules := getAccessControlRules(crdConfig)
+	baseRules := getAccessControlRules(baseConfig)
+
+	// If no CRD rules and no base rules, nothing to do
+	if len(crdRules) == 0 && len(baseRules) == 0 {
+		return mergedYAML, nil
+	}
+
+	// Build set of CRD-managed domains
+	crdDomains := make(map[string]struct{})
+	for _, rule := range crdRules {
+		if domain := getRuleDomain(rule); domain != "" {
+			crdDomains[domain] = struct{}{}
+		}
+	}
+
+	// CRD rules first, then base rules not managed by CRDs
+	finalRules := crdRules
+	for _, rule := range baseRules {
+		domain := getRuleDomain(rule)
+		if _, managed := crdDomains[domain]; !managed {
+			finalRules = append(finalRules, rule)
+		}
+	}
+
+	// Re-sort: specific domains before wildcards, then alphabetically
+	sortAccessControlRules(finalRules)
+
+	setAccessControlRules(mergedConfig, finalRules)
+	return yaml.Marshal(mergedConfig)
 }
 
 // mergeClientsByID merges clients from base config and CRD-assembled config
@@ -346,6 +403,44 @@ func setClients(config map[string]any, clients []any) {
 	ip := getOrCreateNestedMap(config, "identity_providers")
 	oidc := getOrCreateNestedMap(ip, "oidc")
 	oidc["clients"] = clients
+}
+
+// getAccessControlRules extracts rules from access_control.rules
+func getAccessControlRules(config map[string]any) []any {
+	return getNestedSlice(config, "access_control", "rules")
+}
+
+// setAccessControlRules sets rules in access_control.rules
+func setAccessControlRules(config map[string]any, rules []any) {
+	ac := getOrCreateNestedMap(config, "access_control")
+	ac["rules"] = rules
+}
+
+// getRuleDomain extracts domain from an access_control rule map
+func getRuleDomain(rule any) string {
+	if r, ok := rule.(map[string]any); ok {
+		if domain, ok := r["domain"].(string); ok {
+			return domain
+		}
+	}
+	return ""
+}
+
+// sortAccessControlRules sorts rules so specific domains come before wildcards
+func sortAccessControlRules(rules []any) {
+	slices.SortFunc(rules, func(a, b any) int {
+		domainA := getRuleDomain(a)
+		domainB := getRuleDomain(b)
+		aIsWildcard := strings.HasPrefix(domainA, "*")
+		bIsWildcard := strings.HasPrefix(domainB, "*")
+		if aIsWildcard != bIsWildcard {
+			if aIsWildcard {
+				return 1 // a (wildcard) goes after b (specific)
+			}
+			return -1 // a (specific) goes before b (wildcard)
+		}
+		return cmp.Compare(domainA, domainB)
+	})
 }
 
 // getNestedSlice navigates a nested map structure and returns a slice at the final key

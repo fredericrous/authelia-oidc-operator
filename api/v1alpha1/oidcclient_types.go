@@ -104,6 +104,31 @@ type OIDCClientSpec struct {
 	// Required for confidential (non-public) clients
 	// +optional
 	SecretRef *SecretReference `json:"secretRef,omitempty"`
+
+	// AccessControl defines Authelia access_control rule for this client's domain
+	// The operator generates access_control rules from this configuration
+	// +optional
+	AccessControl *AccessControlSpec `json:"accessControl,omitempty"`
+}
+
+// AccessControlSpec defines access control for an OIDC client's domain
+type AccessControlSpec struct {
+	// Domain this rule applies to (e.g., "grafana.daddyshome.fr")
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Domain string `json:"domain"`
+
+	// Subjects allowed to access this domain
+	// Format: "group:groupname" or "user:username"
+	// If empty, all authenticated users are allowed per the policy
+	// +optional
+	Subjects []string `json:"subjects,omitempty"`
+
+	// Policy is the authentication policy for this domain
+	// +optional
+	// +kubebuilder:validation:Enum=bypass;one_factor;two_factor;deny
+	// +kubebuilder:default="two_factor"
+	Policy string `json:"policy,omitempty"`
 }
 
 // SecretReference references a secret in a namespace

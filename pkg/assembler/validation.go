@@ -130,6 +130,24 @@ func (a *Assembler) DetectScopeNameCollisions(policies []securityv1alpha1.Claims
 	)
 }
 
+// ValidateAccessControlSubjects validates subject format in access control specs
+func (a *Assembler) ValidateAccessControlSubjects(clients []securityv1alpha1.OIDCClient) error {
+	for i := range clients {
+		client := &clients[i]
+		if client.Spec.AccessControl == nil {
+			continue
+		}
+
+		for _, subject := range client.Spec.AccessControl.Subjects {
+			if !strings.HasPrefix(subject, "group:") && !strings.HasPrefix(subject, "user:") {
+				return fmt.Errorf("OIDCClient %s/%s: invalid access control subject %q (must start with 'group:' or 'user:')",
+					client.Namespace, client.Name, subject)
+			}
+		}
+	}
+	return nil
+}
+
 // normalizeToSnakeCase converts a name to snake_case (hyphens to underscores)
 func normalizeToSnakeCase(name string) string {
 	return strings.ReplaceAll(name, "-", "_")

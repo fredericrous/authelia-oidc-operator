@@ -51,6 +51,35 @@ spec:
           spec:
             description: OIDCClientSpec defines the desired state of OIDCClient
             properties:
+              accessControl:
+                description: |-
+                  AccessControl defines Authelia access_control rule for this client's domain
+                  The operator generates access_control rules from this configuration
+                properties:
+                  domain:
+                    description: Domain this rule applies to (e.g., "grafana.daddyshome.fr")
+                    minLength: 1
+                    type: string
+                  policy:
+                    default: two_factor
+                    description: Policy is the authentication policy for this domain
+                    enum:
+                    - bypass
+                    - one_factor
+                    - two_factor
+                    - deny
+                    type: string
+                  subjects:
+                    description: |-
+                      Subjects allowed to access this domain
+                      Format: "group:groupname" or "user:username"
+                      If empty, all authenticated users are allowed per the policy
+                    items:
+                      type: string
+                    type: array
+                required:
+                - domain
+                type: object
               accessTokenSignedResponseAlg:
                 description: AccessTokenSignedResponseAlg is the algorithm for signing
                   access tokens
