@@ -475,12 +475,13 @@ func TestAssembleConfidentialClientWithoutSecretRef(t *testing.T) {
 		},
 	}
 
-	_, err := a.Assemble(context.Background(), oidcClients, nil, nil, nil)
-	if err == nil {
-		t.Fatal("Assemble() should fail for confidential client without secretRef")
+	result, err := a.Assemble(context.Background(), oidcClients, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Assemble() should not fail, got: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "secretRef") {
-		t.Errorf("error should mention secretRef, got: %v", err)
+	// Client with missing secretRef should be skipped, not included
+	if len(result.Clients) != 0 {
+		t.Errorf("expected 0 clients (skipped), got %d", len(result.Clients))
 	}
 }

@@ -130,13 +130,20 @@ func (a *Assembler) Assemble(
 		return cmp.Compare(a.Spec.ClientID, b.Spec.ClientID)
 	})
 
+	var skippedClients []string
 	for _, oc := range sortedClients {
 		clientSecret, err := a.resolveClientSecret(ctx, &oc)
 		if err != nil {
-			return nil, operrors.NewTransientError("failed to resolve client secret", err).
-				WithContext("clientId", oc.Spec.ClientID)
+			a.Log.Info("Skipping client with unresolvable secret",
+				"clientId", oc.Spec.ClientID, "error", err.Error())
+			skippedClients = append(skippedClients, oc.Spec.ClientID)
+			continue
 		}
 		result.Clients = append(result.Clients, a.buildClientEntry(&oc, clientSecret))
+	}
+	if len(skippedClients) > 0 {
+		a.Log.Info("Some clients were skipped due to missing secrets",
+			"skipped", skippedClients, "included", len(result.Clients))
 	}
 
 	// Build the OIDC configuration section

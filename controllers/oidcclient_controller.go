@@ -155,6 +155,7 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		oidcSecrets,
 	)
 	if err != nil {
+		log.Error(err, "Assembly failed")
 		if len(oidcClientList.Items) > 0 {
 			r.Recorder.Event(&oidcClientList.Items[0], corev1.EventTypeWarning, "AssemblyFailed", err.Error())
 		}
