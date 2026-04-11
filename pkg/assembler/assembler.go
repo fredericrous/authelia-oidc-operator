@@ -74,12 +74,17 @@ type UserAttributeEntry struct {
 	Expression string `json:"expression"`
 }
 
-// AccessControlRule represents an access_control rule for Authelia configuration
+// AccessControlRule represents an access_control rule for Authelia configuration.
+//
+// Authelia 4.39+ accepts a single key `subject` whose value is either a string
+// (single subject) or a list of strings (multiple subjects with OR semantics).
+// The legacy `subjects` (plural) key was removed in 4.39 and now produces a
+// "configuration key not expected" error. Use `any` so the same field renders
+// as either a YAML scalar or a YAML sequence depending on cardinality.
 type AccessControlRule struct {
-	Domain   string   `json:"domain"`
-	Policy   string   `json:"policy"`
-	Subject  string   `json:"subject,omitempty"`  // Single subject (Authelia format)
-	Subjects []string `json:"subjects,omitempty"` // Multiple subjects (Authelia format)
+	Domain  string `json:"domain"`
+	Policy  string `json:"policy"`
+	Subject any    `json:"subject,omitempty"`
 }
 
 // AssemblyResult contains the result of OIDC configuration assembly
@@ -204,11 +209,13 @@ func (a *Assembler) buildAccessControlRules(clients []securityv1alpha1.OIDCClien
 			Policy: cmp.Or(ac.Policy, "two_factor"),
 		}
 
-		// Authelia uses "subject" for single, "subjects" for multiple
+		// Authelia 4.39+ uses a single `subject` key that accepts either a
+		// string (single) or a list (multiple). Render as scalar when there
+		// is only one subject so the YAML stays readable.
 		if len(ac.Subjects) == 1 {
 			rule.Subject = ac.Subjects[0]
 		} else if len(ac.Subjects) > 1 {
-			rule.Subjects = ac.Subjects
+			rule.Subject = ac.Subjects
 		}
 
 		rules = append(rules, rule)
