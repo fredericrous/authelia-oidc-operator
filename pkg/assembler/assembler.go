@@ -90,6 +90,7 @@ type AccessControlRule struct {
 // AssemblyResult contains the result of OIDC configuration assembly
 type AssemblyResult struct {
 	Clients            []ClientEntry
+	SkippedClientIDs   []string
 	ClaimsPolicies     map[string]ClaimsPolicyEntry
 	Scopes             map[string]ScopeEntry
 	UserAttributes     map[string]UserAttributeEntry
@@ -135,20 +136,19 @@ func (a *Assembler) Assemble(
 		return cmp.Compare(a.Spec.ClientID, b.Spec.ClientID)
 	})
 
-	var skippedClients []string
 	for _, oc := range sortedClients {
 		clientSecret, err := a.resolveClientSecret(ctx, &oc)
 		if err != nil {
 			a.Log.Info("Skipping client with unresolvable secret",
 				"clientId", oc.Spec.ClientID, "error", err.Error())
-			skippedClients = append(skippedClients, oc.Spec.ClientID)
+			result.SkippedClientIDs = append(result.SkippedClientIDs, oc.Spec.ClientID)
 			continue
 		}
 		result.Clients = append(result.Clients, a.buildClientEntry(&oc, clientSecret))
 	}
-	if len(skippedClients) > 0 {
+	if len(result.SkippedClientIDs) > 0 {
 		a.Log.Info("Some clients were skipped due to missing secrets",
-			"skipped", skippedClients, "included", len(result.Clients))
+			"skipped", result.SkippedClientIDs, "included", len(result.Clients))
 	}
 
 	// Build the OIDC configuration section

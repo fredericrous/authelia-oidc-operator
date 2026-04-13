@@ -174,10 +174,24 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Update status for all OIDCClients
+	// Clients whose secrets couldn't be resolved are marked not ready
+	skippedSet := make(map[string]struct{}, len(result.SkippedClientIDs))
+	for _, id := range result.SkippedClientIDs {
+		skippedSet[id] = struct{}{}
+	}
+
 	now := metav1.Now()
 	for i := range oidcClientList.Items {
 		oc := &oidcClientList.Items[i]
-		oc.Status.Ready = true
+		if _, skipped := skippedSet[oc.Spec.ClientID]; skipped {
+			oc.Status.Ready = false
+			r.Recorder.Eventf(oc, corev1.EventTypeWarning, "SecretMissing",
+				"Client secret not found for %q — client excluded from Authelia config. "+
+					"Ensure the Secret referenced by secretRef exists in namespace %q.",
+				oc.Spec.ClientID, cmp.Or(oc.Spec.SecretRef.Namespace, oc.Namespace))
+		} else {
+			oc.Status.Ready = true
+		}
 		oc.Status.LastSyncedAt = &now
 		if err := r.Status().Update(ctx, oc); err != nil {
 			log.Error(err, "Failed to update OIDCClient status", "clientId", oc.Spec.ClientID)
@@ -185,7 +199,8 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	log.Info("Reconciliation completed successfully",
-		"clientCount", len(oidcClientList.Items),
+		"clientCount", len(result.Clients),
+		"skippedCount", len(result.SkippedClientIDs),
 		"policyCount", len(claimsPolicyList.Items),
 		"attributeCount", len(userAttributeList.Items))
 
