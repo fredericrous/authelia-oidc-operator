@@ -56,19 +56,25 @@ func (r *OIDCClientReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&securityv1alpha1.OIDCClient{}).
+		For(&securityv1alpha1.OIDCClient{},
+			// Ignore status-only changes: the reconcile body writes Status.LastSyncedAt
+			// on every run across every OIDCClient, which would otherwise trigger N²
+			// re-reconciles (writes cascade through the watch).
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
 		Owns(&corev1.Secret{}).
-		// Watch ClaimsPolicy resources
+		// Watch ClaimsPolicy resources — GenerationChanged so their status writes
+		// don't fan out into OIDCClient reconciles.
 		Watches(
 			&securityv1alpha1.ClaimsPolicy{},
 			r.enqueueAllOIDCClients(),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		// Watch UserAttribute resources
 		Watches(
 			&securityv1alpha1.UserAttribute{},
 			r.enqueueAllOIDCClients(),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		// Watch base ConfigMap
 		Watches(
