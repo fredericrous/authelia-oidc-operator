@@ -103,3 +103,9 @@ $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 .PHONY: all help manifests generate fmt vet test test-unit test-integration test-coverage build run docker-build docker-push install uninstall deploy undeploy controller-gen envtest
+
+test-coverage-meaningful: test ## Print coverage excluding generated code + main.go.
+	@head -1 cover.out > cover.filtered.out
+	@grep -v 'zz_generated' cover.out | grep -v '/main.go:' | tail -n +2 >> cover.filtered.out
+	@echo "--- coverage (meaningful: excludes zz_generated.*.go and main.go) ---"
+	@go tool cover -func cover.filtered.out | tail -1

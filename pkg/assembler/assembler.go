@@ -57,10 +57,10 @@ type ClientEntry struct {
 
 // ClaimsPolicyEntry represents a claims policy entry for Authelia configuration
 type ClaimsPolicyEntry struct {
-	IDToken       []string               `json:"id_token,omitempty"`
-	Userinfo      []string               `json:"userinfo,omitempty"`
-	AccessToken   []string               `json:"access_token,omitempty"`
-	Introspection []string               `json:"introspection,omitempty"`
+	IDToken       []string       `json:"id_token,omitempty"`
+	Userinfo      []string       `json:"userinfo,omitempty"`
+	AccessToken   []string       `json:"access_token,omitempty"`
+	Introspection []string       `json:"introspection,omitempty"`
 	CustomClaims  map[string]any `json:"custom_claims,omitempty"`
 }
 

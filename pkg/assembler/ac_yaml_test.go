@@ -1,8 +1,8 @@
 package assembler
 
 import (
-	"testing"
 	"sigs.k8s.io/yaml"
+	"testing"
 )
 
 func TestAccessControlRuleYAMLOutput(t *testing.T) {
