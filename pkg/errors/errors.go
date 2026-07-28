@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -73,7 +74,8 @@ func NewConfigError(message string, cause error) *OperatorError {
 
 // ShouldRetry checks if an error should be retried
 func ShouldRetry(err error) bool {
-	if opErr, ok := err.(*OperatorError); ok {
+	var opErr *OperatorError
+	if errors.As(err, &opErr) {
 		return opErr.Type == ErrorTypeTransient
 	}
 	// Default to retry for unknown errors
