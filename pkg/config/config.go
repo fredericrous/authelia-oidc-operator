@@ -50,7 +50,8 @@ func NewDefaultConfig() *OperatorConfig {
 		AutheliaNamespace:         "authelia",
 		AutheliaConfigMapName:     "authelia-config",
 		AutheliaConfigMapBaseName: "authelia-config-base",
-		OIDCSecretsName:           "authelia-oidc-secrets",
+		// #nosec G101 -- the *name* of a Kubernetes Secret object, not a credential
+		OIDCSecretsName: "authelia-oidc-secrets",
 	}
 }
 

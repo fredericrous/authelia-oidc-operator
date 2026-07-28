@@ -310,7 +310,7 @@ func (a *Assembler) resolveClientSecret(ctx context.Context, oc *securityv1alpha
 			WithContext("hint", "use ExternalSecrets to manage the client secret and reference it via secretRef")
 	}
 
-	namespace := cmp.Or(oc.Spec.SecretRef.Namespace, oc.ObjectMeta.Namespace)
+	namespace := cmp.Or(oc.Spec.SecretRef.Namespace, oc.Namespace)
 
 	secret := &corev1.Secret{}
 	if err := a.Client.Get(ctx, types.NamespacedName{Name: oc.Spec.SecretRef.Name, Namespace: namespace}, secret); err != nil {
