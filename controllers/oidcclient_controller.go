@@ -258,7 +258,7 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 
 	// Post-process: merge access_control rules
 	// CRD rules take precedence over base rules for the same domain
-	mergedYAML, err = r.mergeAccessControlRules([]byte(baseYAML), []byte(result.ConfigYAML), mergedYAML)
+	mergedYAML, err = r.mergeAccessControlRules(ctx, []byte(baseYAML), []byte(result.ConfigYAML), mergedYAML)
 	if err != nil {
 		return operrors.NewPermanentError("failed to merge access_control rules", err)
 	}
@@ -322,7 +322,9 @@ func (r *OIDCClientReconciler) updateAutheliaConfig(ctx context.Context, result 
 // mergeAccessControlRules merges access_control rules from base config and CRD-assembled config
 // CRD rules appear first, then base rules (excluding duplicates by domain)
 // Within the merged result, specific domains come before wildcards
-func (r *OIDCClientReconciler) mergeAccessControlRules(baseYAML, crdYAML, mergedYAML []byte) ([]byte, error) {
+func (r *OIDCClientReconciler) mergeAccessControlRules(ctx context.Context, baseYAML, crdYAML, mergedYAML []byte) ([]byte, error) {
+	log := logr.FromContextOrDiscard(ctx)
+
 	var baseConfig, crdConfig, mergedConfig map[string]any
 	if err := yaml.Unmarshal(baseYAML, &baseConfig); err != nil {
 		return nil, err
@@ -350,13 +352,27 @@ func (r *OIDCClientReconciler) mergeAccessControlRules(baseYAML, crdYAML, merged
 		}
 	}
 
-	// CRD rules first, then base rules not managed by CRDs
+	// CRD rules first, then base rules not superseded by a CRD rule.
+	//
+	// "Superseded" means the CRD owns the domain AND the base rule is just as
+	// broad. A base rule that NARROWS — one carrying resources/methods/networks
+	// — is a carve-out, not a competing definition of the same thing, so
+	// dropping it silently deletes configuration the author wrote. That is
+	// exactly what happened to a `resources: ^/api/packages/.*` bypass for
+	// gitea.daddyshome.fr: the gitea OIDCClient claims the domain, so the rule
+	// vanished between authelia-config-base and authelia-config while every
+	// reconcile logged success.
 	finalRules := crdRules
 	for _, rule := range baseRules {
 		domain := getRuleDomain(rule)
-		if _, managed := crdDomains[domain]; !managed {
-			finalRules = append(finalRules, rule)
+		if _, managed := crdDomains[domain]; managed && !ruleIsNarrowing(rule) {
+			// Keep this loud. Silence here cost a deploy that looked applied
+			// and was not; the only symptom was the absence of a line.
+			log.Info("Dropping base access_control rule superseded by an OIDCClient rule for the same domain",
+				"domain", domain)
+			continue
 		}
+		finalRules = append(finalRules, rule)
 	}
 
 	// Re-sort: specific domains before wildcards, then alphabetically
@@ -448,9 +464,39 @@ func getRuleDomain(rule any) string {
 	return ""
 }
 
-// sortAccessControlRules sorts rules so specific domains come before wildcards
+// ruleIsNarrowing reports whether a rule restricts to less than its whole
+// domain. Authelia's matchers beyond `domain`/`domain_regex`: a rule carrying
+// any of these applies to a SUBSET of the domain's requests, so it can coexist
+// with a domain-wide rule instead of competing with it.
+//
+// `subject` is deliberately excluded. Authelia treats a subject-less rule as
+// matching everyone, so `two_factor for group:x` and `two_factor for everyone`
+// are two answers to the same question, and letting a base rule quietly
+// out-rank the CRD's is the ambiguity this merge exists to resolve.
+func ruleIsNarrowing(rule any) bool {
+	r, ok := rule.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, k := range []string{"resources", "methods", "networks", "query"} {
+		if v, present := r[k]; present && v != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// sortAccessControlRules sorts rules so specific domains come before wildcards,
+// and within one domain, narrowing rules come before domain-wide ones.
+//
+// Ordering IS the semantics here: Authelia evaluates rules top-down and takes
+// the FIRST match. A `/api/packages/` bypass placed after that domain's
+// catch-all never applies. The previous comparator compared domains only, so
+// two rules on the same domain tied — and slices.SortFunc is NOT stable, so
+// which one won was unspecified. Stable sort plus an explicit narrowing tie-
+// break makes the result deterministic and correct rather than incidental.
 func sortAccessControlRules(rules []any) {
-	slices.SortFunc(rules, func(a, b any) int {
+	slices.SortStableFunc(rules, func(a, b any) int {
 		domainA := getRuleDomain(a)
 		domainB := getRuleDomain(b)
 		aIsWildcard := strings.HasPrefix(domainA, "*")
@@ -461,7 +507,17 @@ func sortAccessControlRules(rules []any) {
 			}
 			return -1 // a (specific) goes before b (wildcard)
 		}
-		return cmp.Compare(domainA, domainB)
+		if c := cmp.Compare(domainA, domainB); c != 0 {
+			return c
+		}
+		aNarrow, bNarrow := ruleIsNarrowing(a), ruleIsNarrowing(b)
+		if aNarrow != bNarrow {
+			if aNarrow {
+				return -1 // carve-out first, or it can never match
+			}
+			return 1
+		}
+		return 0 // equal rank; stable sort preserves authored order
 	})
 }
 
