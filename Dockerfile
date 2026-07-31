@@ -1,5 +1,11 @@
 # Build stage
-FROM golang:1.25.1-alpine AS builder
+# Keep in lockstep with the `go` directive in go.mod. The base image sets
+# GOTOOLCHAIN=local, so an older base does not silently download a newer
+# toolchain — it fails outright with "go.mod requires go >= X (running Y)".
+# PR #1 bumped go.mod to 1.25.12 without touching this line, which broke every
+# release build while PR checks stayed green (setup-go reads go-version-file
+# and fetches the matching toolchain, so only the image build noticed).
+FROM golang:1.25.12-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates
