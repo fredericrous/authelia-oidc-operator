@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -57,9 +58,9 @@ func (r *OIDCClientReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&securityv1alpha1.OIDCClient{},
-			// Ignore status-only changes: the reconcile body writes Status.LastSyncedAt
-			// on every run across every OIDCClient, which would otherwise trigger N²
-			// re-reconciles (writes cascade through the watch).
+			// Ignore status-only changes: the reconcile body stamps
+			// Status.LastSyncedAt on every run, which would otherwise feed its own
+			// writes back through this watch as new reconciles.
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Owns(&corev1.Secret{}).
@@ -179,28 +180,54 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Update status for all OIDCClients
 	// Clients whose secrets couldn't be resolved are marked not ready
 	skippedSet := make(map[string]struct{}, len(result.SkippedClientIDs))
 	for _, id := range result.SkippedClientIDs {
 		skippedSet[id] = struct{}{}
 	}
 
-	now := metav1.Now()
+	// Write status for THIS request's OIDCClient only.
+	//
+	// This used to write all N clients on every reconcile. Combined with
+	// enqueueAllOIDCClients (one trigger enqueues every client), that made each
+	// trigger N reconciles x N writes, and since Status.LastSyncedAt is stamped
+	// unconditionally, every one of those was a real write. The informer cache
+	// cannot keep up with its own writes, so later reconciles read stale
+	// resourceVersions and the update 409s:
+	//
+	//   "Failed to update OIDCClient status" oidcclient={n8n}
+	//     clientId=kb-vision error="Operation cannot be fulfilled ... kb-vision:
+	//     the object has been modified"
+	//
+	// — note the reconcile is for n8n while the failing write is kb-vision's,
+	// which is the tell. Those conflicts were logged and DROPPED, so a client
+	// could keep Ready=true after its secret went missing: precisely the signal
+	// the skipped-client handling exists to publish.
+	//
+	// Writing only the requested object is safe because readiness is per-client
+	// — a client is skipped when ITS OWN secretRef cannot be resolved, and
+	// enqueueRequestsForSecret already enqueues exactly the clients referencing
+	// a changed Secret. Every client still gets its own reconcile; each now
+	// writes one object, and no two reconciles write the same one.
+	var target *securityv1alpha1.OIDCClient
 	for i := range oidcClientList.Items {
 		oc := &oidcClientList.Items[i]
-		if _, skipped := skippedSet[oc.Spec.ClientID]; skipped {
-			oc.Status.Ready = false
-			r.Recorder.Eventf(oc, corev1.EventTypeWarning, "SecretMissing",
+		if oc.Name == req.Name && oc.Namespace == req.Namespace {
+			target = oc
+			break
+		}
+	}
+	if target != nil {
+		ready := true
+		if _, skipped := skippedSet[target.Spec.ClientID]; skipped {
+			ready = false
+			r.Recorder.Eventf(target, corev1.EventTypeWarning, "SecretMissing",
 				"Client secret not found for %q — client excluded from Authelia config. "+
 					"Ensure the Secret referenced by secretRef exists in namespace %q.",
-				oc.Spec.ClientID, cmp.Or(oc.Spec.SecretRef.Namespace, oc.Namespace))
-		} else {
-			oc.Status.Ready = true
+				target.Spec.ClientID, cmp.Or(target.Spec.SecretRef.Namespace, target.Namespace))
 		}
-		oc.Status.LastSyncedAt = &now
-		if err := r.Status().Update(ctx, oc); err != nil {
-			log.Error(err, "Failed to update OIDCClient status", "clientId", oc.Spec.ClientID)
+		if err := r.updateClientStatus(ctx, req.NamespacedName, ready); err != nil {
+			log.Error(err, "Failed to update OIDCClient status", "clientId", target.Spec.ClientID)
 		}
 	}
 
@@ -217,6 +244,31 @@ func (r *OIDCClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// updateClientStatus sets Ready/LastSyncedAt on one OIDCClient, re-reading it
+// on conflict.
+//
+// RetryOnConflict rather than a bare Update because the cached copy the
+// reconcile listed can already be stale by the time we write — that is a normal
+// race, not an error, and the previous code turned it into a silently dropped
+// status. The retry re-reads through the client (fresh resourceVersion) and
+// re-applies, which is the standard fix for "the object has been modified".
+func (r *OIDCClientReconciler) updateClientStatus(ctx context.Context, key types.NamespacedName, ready bool) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &securityv1alpha1.OIDCClient{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			// Deleted mid-reconcile: nothing to publish, and not a failure.
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		now := metav1.Now()
+		latest.Status.Ready = ready
+		latest.Status.LastSyncedAt = &now
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // updateAutheliaConfig updates the Authelia ConfigMap with deep-merged configuration
