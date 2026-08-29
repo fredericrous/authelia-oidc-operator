@@ -5,7 +5,7 @@
 # PR #1 bumped go.mod to 1.25.12 without touching this line, which broke every
 # release build while PR checks stayed green (setup-go reads go-version-file
 # and fetches the matching toolchain, so only the image build noticed).
-FROM golang:1.25.12-alpine AS builder
+FROM golang:1.25.13-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates
