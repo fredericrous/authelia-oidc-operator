@@ -13,9 +13,9 @@ ENVTEST_K8S_VERSION = $(KUBE_VERSION)
 # Go's equivalent of a virtualenv: with GOTOOLCHAIN set to an exact version the
 # go command downloads that release once (into the module cache) and uses it,
 # whatever `go` on PATH happens to be. Without the pin a NEWER local go is used
-# silently — `go 1.25.13` in go.mod only forbids OLDER ones — so a workstation
-# on 1.27 tested code that CI (setup-go, go-version-file: go.mod) builds on
-# 1.25. Exported, so it also reaches the tools installed with `go install`.
+# silently — go.mod's `go` line only forbids OLDER ones — so a workstation
+# on a newer Go tested code that CI (setup-go, go-version-file: go.mod) builds on
+# the pinned release. Exported, so it also reaches the tools installed with `go install`.
 GO_VERSION := $(shell awk '/^go /{print $$2}' go.mod)
 export GOTOOLCHAIN := go$(GO_VERSION)
 
@@ -113,13 +113,9 @@ CONTROLLER_TOOLS_VERSION ?= v0.19.0
 # release is built against one Go minor and must not lag go.mod's: when the
 # `go` line moves to a new minor, bump this alongside it.
 GOLANGCI_LINT_VERSION ?= v2.11.4
-# setup-envtest tracks controller-runtime's minor (go.mod has v0.22.0), and its
-# own tagged releases need a newer Go than this module's `go` line — v0.25.1,
-# which `@latest` resolved to, requires Go 1.26. Before the toolchain pin above
-# go would quietly fetch a 1.26 toolchain just to build a test helper for a
-# 1.25 project; that is the drift the pin exists to stop. So pin the matching
-# release-0.22 branch head as its pseudo-version (it requires only go 1.24.0),
-# which also makes the build reproducible.
+# setup-envtest tracks controller-runtime's minor (go.mod has v0.22.0). Pin the
+# matching release-0.22 branch head as its pseudo-version instead of `@latest`,
+# which would drift to a newer minor and make the build irreproducible.
 SETUP_ENVTEST_VERSION ?= v0.0.0-20260125163108-a19ec76a3c5d
 
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
@@ -133,7 +129,7 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary (the release binary, as its authors recommend over `go install`).
 $(GOLANGCI_LINT): $(LOCALBIN)
 	test -s $(GOLANGCI_LINT) && $(GOLANGCI_LINT) --version | grep -q "version $(GOLANGCI_LINT_VERSION:v%=%) " || \
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LOCALBIN) $(GOLANGCI_LINT_VERSION)
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b $(LOCALBIN) $(GOLANGCI_LINT_VERSION)
 
 .PHONY: all help manifests generate fmt vet lint test test-unit test-integration test-coverage build run docker-build docker-push install uninstall deploy undeploy controller-gen envtest golangci-lint
 
