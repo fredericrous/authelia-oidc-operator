@@ -112,7 +112,7 @@ CONTROLLER_TOOLS_VERSION ?= v0.19.0
 # `make lint` so CI and a workstation cannot drift apart. A golangci-lint
 # release is built against one Go minor and must not lag go.mod's: when the
 # `go` line moves to a new minor, bump this alongside it.
-GOLANGCI_LINT_VERSION ?= v2.4.0
+GOLANGCI_LINT_VERSION ?= v2.11.4
 # setup-envtest tracks controller-runtime's minor (go.mod has v0.22.0), and its
 # own tagged releases need a newer Go than this module's `go` line — v0.25.1,
 # which `@latest` resolved to, requires Go 1.26. Before the toolchain pin above
