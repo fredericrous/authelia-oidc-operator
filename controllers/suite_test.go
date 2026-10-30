@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -33,7 +34,23 @@ func TestControllers(t *testing.T) {
 	RunSpecs(t, "Controller Suite")
 }
 
+// envtestAssetsPresent reports whether KUBEBUILDER_ASSETS points at a
+// directory that actually holds a control plane. `make test` sets it; a bare
+// `go test ./...` (the amont push gate) does not, and `make test-unit` (CI)
+// leaves this package out.
+func envtestAssetsPresent() bool {
+	dir := os.Getenv("KUBEBUILDER_ASSETS")
+	if dir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, "etcd"))
+	return err == nil
+}
+
 var _ = BeforeSuite(func() {
+	if !envtestAssetsPresent() {
+		Skip("KUBEBUILDER_ASSETS is unset or has no etcd; run `make test` for the controller suite")
+	}
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 	ctx, cancel = context.WithCancel(context.TODO())
@@ -100,6 +117,9 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
+	if testEnv == nil {
+		return
+	}
 	cancel()
 	By("tearing down the test environment")
 	err := testEnv.Stop()
