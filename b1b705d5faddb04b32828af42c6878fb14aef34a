@@ -1,0 +1,16 @@
+amont-provenance-v1
+commit 54ade1f65c0935f048f49e7a6cfb042a68201868
+tree b1b705d5faddb04b32828af42c6878fb14aef34a
+canon e0158474be391a21625a6e92b2459f62e8ec36b5
+patch 17c0ab27badeaf294f90972ff54b5cd003ac38a1
+plan docs/plans/2026-11-08-ci-fetches-release-assets-api.md ffae19961aa5e8775b6b6587fbc49abf7d9cd3bbef764966af98e18d3221a071
+review reviewed d65b1ead4b44bd71b33b54b3d27a962d2e383dadffd753bb764974c5ad2f4ad8
+preview not-required
+producer amont-agent 3.23.0
+
+-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7UOvJ8myo4dhW907VFty7T/bUV
+RFQerK+MWJ4bjChwcAAAAQYW1vbnQtcHJvdmVuYW5jZQAAAAAAAAAGc2hhNTEyAAAAUwAA
+AAtzc2gtZWQyNTUxOQAAAEAQbFwF5JUlGIFlWAkezSQdMxyfazKY2y7wiuLXHXHeYAH/5B
+zZx1a0yAYeHJ0Zdaxw3cuoyoePD9koAVfK8tYP
+-----END SSH SIGNATURE-----
