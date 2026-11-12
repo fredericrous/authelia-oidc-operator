@@ -1,6 +1,6 @@
 module github.com/fredericrous/homelab/authelia-oidc-operator
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/TwiN/deepmerge v0.2.2
