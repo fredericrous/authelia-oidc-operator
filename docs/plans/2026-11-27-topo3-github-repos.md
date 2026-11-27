@@ -1,7 +1,7 @@
 ---
 canonical: decisions:docs/plans/2026-11-27-topo3-github-repos.md
 phases: [1]
-status: active
+status: done
 branch: chore/t25-topo3
 repos: [authelia-oidc-operator]
 ---
@@ -14,3 +14,6 @@ script.
 
 ## Code review
 - authelia-oidc-operator: none — CI pin, re-vendored pack, regenerated hook and gate block, one comment, no code
+
+## Implementation review
+- implementation-review (opus): approve-with-changes (48k, 31 s): Outcome lacked source commit and full pack sha; fixed in the canonical plan.
